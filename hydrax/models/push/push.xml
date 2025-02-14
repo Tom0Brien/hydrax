@@ -1,0 +1,42 @@
+<mujoco model="push">
+  <option timestep="0.01" iterations="1" ls_iterations="4" />
+
+  <default>
+    <velocity ctrllimited="true" ctrlrange="-1.0 1.0" kv="0.1"/>
+    <default class="goal">
+      <geom conaffinity="0" contype="0" rgba="0 1 0 0.2"/>
+    </default>
+    <geom friction="1.0" solimp="0.0 0.95 0.005" solref="0.02 1"/>
+  </default>
+
+  <worldbody>
+    <!-- Goal position -->
+    <body name="goal" mocap="true" pos="0.0 0.0 0.009">
+      <geom class="goal" name="goal_geom" type="cylinder" size="0.02 0.01" rgba="0 1 0 0.2"/>
+    </body>
+
+    <!-- Object to be pushed -->
+    <body name="object" pos="0.0 0.0 0.0095">
+      <joint name="object_x" type="slide" pos="0 0 0" axis="1 0 0" />
+      <joint name="object_y" type="slide" pos="0 0 0" axis="0 1 0" />
+      <geom name="object_geom" type="cylinder" size="0.02 0.01" rgba="0 0 1 1" />
+    </body>
+
+    <!-- Robot (actuated cylinder) -->
+    <body name="robot" pos="0.0 0.1 0.011">
+      <joint name="robot_x" type="slide" pos="0 0 0" axis="1 0 0" />
+      <joint name="robot_y" type="slide" pos="0 0 0" axis="0 1 0" />
+      <geom name="robot_geom" type="cylinder" size="0.02 0.01" rgba="1 0 0 1" />
+      <site name="robot_site" pos="0 0 0" rgba="0 0 0 0"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <velocity name="x_motor" joint="robot_x" />
+    <velocity name="y_motor" joint="robot_y" />
+  </actuator>
+
+  <sensor>
+    <framepos name="position" objtype="body" objname="object" reftype="body" refname="goal"/>
+  </sensor>
+</mujoco>
