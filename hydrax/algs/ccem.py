@@ -96,66 +96,34 @@ class CCEM(SamplingBasedController):
     def update_params(
         self, params: CCEMParams, rollouts: Trajectory
     ) -> CCEMParams:
-        """Update the mean with an exponentially weighted average using the constrained approach.
+        """Update the distribution parameters based on elite samples.
 
-        This implementation selects elites based on:
-        1. If there are enough feasible samples (constraint_cost <= 0), select elites from them
-        2. Otherwise, select all feasible samples and the remaining from the lowest constraint violations
+        Selects elite samples by prioritizing feasible solutions (constraint_cost <= 0).
+        If there are enough feasible samples, only those are used. Otherwise, all feasible
+        samples are selected plus the least-violating infeasible samples.
         """
-        # Sum over time steps for both cost and constraint cost
+        # Sum costs across time steps
         costs = jnp.sum(rollouts.costs, axis=1)
         constraint_costs = jnp.sum(rollouts.constraint_costs, axis=1)
 
-        # Identify feasible samples (where constraint_cost <= 0)
+        # Identify feasible samples
         is_feasible = constraint_costs <= 0
-        num_feasible = jnp.sum(is_feasible)
 
-        # Create large sentinel values to push undesired samples to the end after sorting
-        LARGE_VALUE = 1e9
-
-        # Get masks for feasible and infeasible solutions
-        feasible_mask = is_feasible
-        infeasible_mask = ~is_feasible
-
-        # Sort by cost for feasible samples (adding large value to infeasible to push them back)
-        # We create two arrays of indices - one sorted by cost, one by constraint violation
-        feasible_sort_values = costs + LARGE_VALUE * infeasible_mask
-        feasible_sorted_indices = jnp.argsort(feasible_sort_values)
-
-        # Sort by constraint violation for infeasible samples
-        infeasible_sort_values = constraint_costs + LARGE_VALUE * feasible_mask
-        infeasible_sorted_indices = jnp.argsort(infeasible_sort_values)
-
-        # Function to select elites when we have enough feasible solutions
-        def select_from_feasible():
-            return feasible_sorted_indices[: self.num_elites]
-
-        # Function to select mixed elites - uses masking instead of dynamic slicing
-        def select_mixed():
-            # Create a mask of the form [1,1,...,1,0,0,...] where there are num_feasible 1s
-            # This mask will be used to combine feasible and infeasible solutions
-            idx_range = jnp.arange(self.num_elites)
-            feasible_idx_mask = idx_range < num_feasible
-
-            # Where the mask is True, take values from feasible_sorted_indices
-            # Where the mask is False, take values from infeasible_sorted_indices
-            # We take the first num_feasible items from feasible_sorted_indices
-            # And the first (num_elites - num_feasible) items from infeasible_sorted_indices
-            mixed_elites = jnp.where(
-                feasible_idx_mask,
-                feasible_sorted_indices[idx_range],
-                infeasible_sorted_indices[idx_range - num_feasible],
-            )
-            return mixed_elites
-
-        # If we have enough feasible samples, use those; otherwise, use mixed selection
-        elites = jax.lax.cond(
-            num_feasible >= self.num_elites, select_from_feasible, select_mixed
+        # Create a combined score for sorting, prioritizing constraint feasibility over cost
+        # For feasible samples: use their cost
+        # For infeasible samples: use constraint violation, offset by max cost + 1
+        combined_score = jnp.where(
+            is_feasible,
+            costs,
+            constraint_costs + jnp.max(costs) + 1.0,
         )
 
-        # The new proposal distribution is a Gaussian fit to the elites
-        mean = jnp.mean(rollouts.knots[elites], axis=0)
-        cov = jnp.maximum(
-            jnp.std(rollouts.knots[elites], axis=0), self.sigma_min
-        )
+        # Sort all samples in one pass and take top elite_count
+        elite_indices = jnp.argsort(combined_score)[: self.num_elites]
+
+        # Compute new distribution parameters from elites
+        elite_samples = rollouts.knots[elite_indices]
+        mean = jnp.mean(elite_samples, axis=0)
+        cov = jnp.maximum(jnp.std(elite_samples, axis=0), self.sigma_min)
+
         return params.replace(mean=mean, cov=cov)
