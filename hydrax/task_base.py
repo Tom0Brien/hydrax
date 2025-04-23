@@ -83,6 +83,17 @@ class Task(ABC):
         """
         pass
 
+    @abstractmethod
+    def constraint_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
+        """The constraint cost c(xₜ, uₜ).
+
+        Args:
+            state: The current state xₜ.
+            control: The control action uₜ.
+        """
+        # By default, no constraints
+        return jnp.zeros((1,))
+
     def get_trace_sites(self, state: mjx.Data) -> jax.Array:
         """Get the positions of the trace sites at the current time step.
 
