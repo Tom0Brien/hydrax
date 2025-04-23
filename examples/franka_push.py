@@ -68,11 +68,11 @@ elif args.algorithm == "cem":
     print("Running CEM")
     ctrl = CEM(
         task,
-        num_samples=2000,
+        num_samples=512,
         sigma_start=0.1,
         sigma_min=0.1,
         num_elites=20,
-        plan_horizon=0.5,
+        plan_horizon=0.4,
         spline_type="zero",
         num_knots=6,
     )
@@ -81,11 +81,12 @@ elif args.algorithm == "ccem":
     print("Running CCEM")
     ctrl = CCEM(
         task,
-        num_samples=2000,
-        sigma_start=0.1,
+        num_samples=512,
+        sigma_start=0.3,
         sigma_min=0.1,
         num_elites=20,
-        plan_horizon=0.5,
+        explore_fraction=0.5,
+        plan_horizon=0.4,
         spline_type="zero",
         num_knots=6,
     )
@@ -191,4 +192,5 @@ run_interactive(
     show_traces=False,
     max_traces=5,
     initial_control=initial_control,
+    record_video=True,
 )
