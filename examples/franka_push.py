@@ -169,7 +169,7 @@ mj_data.qpos[:9] = [
 ]
 
 # Initial conditions for controller
-initial_control = jnp.tile(
+initial_knots = jnp.tile(
     jnp.array(
         [
             0.5,
@@ -191,6 +191,6 @@ run_interactive(
     frequency=50,
     show_traces=False,
     max_traces=5,
-    initial_control=initial_control,
+    initial_knots=initial_knots,
     record_video=True,
 )
