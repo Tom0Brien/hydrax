@@ -25,6 +25,7 @@
     <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0.2"/>
     <material name="table" rgba="0.7 0.7 0.7 1"/>
     <material name="box" rgba="0.8 0.2 0.2 1"/>
+    <material name="boundary" rgba="1 0 0 0.1"/>
   </asset>
 
   <worldbody>
@@ -38,6 +39,11 @@
       <geom name="table_leg2" type="box" size="0.02 0.02 0.18" pos="0.35 -0.35 0.18" material="table"/>
       <geom name="table_leg3" type="box" size="0.02 0.02 0.18" pos="-0.35 0.35 0.18" material="table"/>
       <geom name="table_leg4" type="box" size="0.02 0.02 0.18" pos="-0.35 -0.35 0.18" material="table"/>
+       <!-- Virtual boundary visualization -->
+      <geom name="bound_x_pos" type="box" size="0.01 0.35 0.02" pos="0.35 0 0.39" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_x_neg" type="box" size="0.01 0.35 0.02" pos="-0.35 0 0.39" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_y_pos" type="box" size="0.35 0.01 0.02" pos="0 0.35 0.39" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_y_neg" type="box" size="0.35 0.01 0.02" pos="0 -0.35 0.39" material="boundary" contype="0" conaffinity="0"/>
     </body>
 
     <!-- pushable box -->
@@ -54,4 +60,10 @@
       <geom type="box" size="0.03 0.03 0.03" contype="0" conaffinity="0" rgba="0 1 0 0.3" />
     </body>
   </worldbody>
+
+  <!-- Sensors for the box -->
+  <sensor>
+    <framepos name="box_position" objtype="body" objname="box" reftype="site" refname="reference" />
+    <framequat name="box_orientation" objtype="body" objname="box" reftype="site" refname="reference"/>
+  </sensor>
 </mujoco>
