@@ -1,0 +1,33 @@
+<mujoco model="particle3d">
+  <option timestep="0.01" iterations="1" ls_iterations="4">
+    <flag contact="disable" eulerdamp="disable"/>
+  </option>
+
+  <default>
+    <joint type="hinge" axis="0 0 1" limited="true" range="-.29 .29" damping="0" />
+    <motor gear=".1" ctrlrange="-1 1" ctrllimited="true" />
+    <default class="translation">
+      <position kp="20" kv="5" ctrlrange="-1 1"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <site name="reference" pos="0 0 0" size="0.01" rgba="0 0 0 0.0"/>
+    
+    <body name="goal" mocap="true" pos="0.58 0 0.1" quat="1 0 0 0">
+      <geom type="sphere" size=".01" contype="0" conaffinity="0" rgba="0 1 0 .5" />
+    </body>
+
+    <body name="pointmass" pos="0.4 0 0.5" gravcomp="1">
+      <joint type="free" />
+      <geom name="pointmass" type="sphere" size=".01" mass=".3" />
+      <site name="particle" pos="0 0 0" size="0.01" />
+    </body>
+  </worldbody>
+
+  <actuator>
+    <position name="x" site="particle" refsite="reference" gear="1 0 0 0 0 0" class="translation"/>
+    <position name="y" site="particle" refsite="reference" gear="0 1 0 0 0 0" class="translation"/>
+    <position name="z" site="particle" refsite="reference" gear="0 0 1 0 0 0" class="translation"/>
+  </actuator>
+</mujoco>
