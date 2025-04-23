@@ -252,17 +252,28 @@ class SamplingBasedController(ABC):
             trace_sites=trace_sites,
         )
 
-    def init_params(self, seed: int = 0) -> Any:
+    def init_params(
+        self, initial_control: jax.Array = None, seed: int = 0
+    ) -> Any:
         """Initialize the policy parameters, U = [u₀, u₁, ... ] ~ π(params).
 
         Args:
+            initial_control: The initial knots of the control spline.
             seed: The random seed for initializing the policy parameters.
 
         Returns:
             The initial policy parameters.
         """
         rng = jax.random.key(seed)
-        mean = jnp.zeros((self.num_knots, self.task.model.nu))
+        mean = (
+            initial_control
+            if initial_control is not None
+            else jnp.zeros((self.num_knots, self.task.model.nu))
+        )
+        if initial_control is not None:
+            assert mean.shape == (self.num_knots, self.task.model.nu), (
+                f"Initial control must have shape (num_knots, nu), got {mean.shape}"
+            )
         tk = jnp.linspace(0.0, self.plan_horizon, self.num_knots)
         return SamplingParams(tk=tk, mean=mean, rng=rng)
 
