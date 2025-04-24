@@ -41,17 +41,6 @@ class FrankaReach(Task):
             trace_sites=["gripper"],
         )
 
-        self.Kp = jnp.diag(jnp.array([100.0, 100.0, 100.0, 30.0, 30.0, 30.0]))
-        self.Kd = 2.0 * jnp.sqrt(self.Kp)
-        self.nullspace_stiffness = 0.0
-        self.q_d_nullspace = jnp.array(
-            [-0.196, -0.189, 0.182, -2.1, 0.0378, 1.91, 0.756, 0, 0]
-        )
-        self.u_min = jnp.array([-0, -1, 0.3, -3.14, -3.14, -3.14])
-        self.u_max = jnp.array([1, 1, 1, 3.14, 3.14, 3.14])
-
-        self.ee_site_id = mj_model.site("gripper").id
-        self.reference_id = mj_model.site("reference").id
         # Get sensor ids
         self.gripper_position_sensor = mujoco.mj_name2id(
             mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "gripper_position"

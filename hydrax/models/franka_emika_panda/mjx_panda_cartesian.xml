@@ -38,7 +38,7 @@
 
   <default>
     <default class="translation">
-      <position kp="100" kv="40" ctrlrange="-1 1"/>
+      <position kp="200" kv="100" ctrlrange="-1 1"/>
     </default>
     <default class="rotation">
       <!--
