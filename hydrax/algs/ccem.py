@@ -138,7 +138,9 @@ class CCEM(SamplingBasedController):
         """
         # Sum costs across time steps
         costs = jnp.sum(rollouts.costs, axis=1)
-        constraint_costs = jnp.sum(rollouts.constraint_costs, axis=1)
+        constraint_costs = jnp.sum(
+            jnp.maximum(rollouts.constraint_costs, 0), axis=1
+        )
 
         # Identify feasible samples
         is_feasible = constraint_costs <= 0
