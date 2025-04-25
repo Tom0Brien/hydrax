@@ -65,8 +65,8 @@ else:  # Default to CEM
     print("Using CEM controller")
     controller = CEM(
         task,
-        num_samples=512,
-        num_elites=20,
+        num_samples=32,
+        num_elites=8,
         sigma_start=0.2,
         sigma_min=0.1,
         explore_fraction=0.5,
@@ -75,15 +75,16 @@ else:  # Default to CEM
         num_knots=11,
     )
 
+
 # Create the system identifier using the base class method
-sigma_start = 0.1
+sigma_start = 0.2
 identifier = CEMIdentifier(
     model_template=mjx.put_model(task.mj_model),
     apply_params_fn=task.apply_params_fn,
     param_dim=task.get_param_dim(),
     buffer_size=32,
-    num_samples=128,
-    num_elites=10,
+    num_samples=32,
+    num_elites=8,
     sigma_start=sigma_start,
     sigma_min=0.05,
     seed=0,
@@ -104,8 +105,6 @@ mj_model = task.mj_model
 for i in range(mj_model.nu):
     mj_model.actuator_gainprm[i, 0] *= 1.5  # Increase gains
 
-print("identifier.params():", identifier.params())
-
 # Initialize data with default state
 mj_data = mujoco.MjData(mj_model)
 
@@ -115,7 +114,7 @@ run_interactive(
     mj_model,
     mj_data,
     frequency=args.frequency,
-    show_traces=True,
+    show_traces=False,
     max_traces=5,
     identifier=identifier,
 )

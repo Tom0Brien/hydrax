@@ -111,7 +111,7 @@ class CEMIdentifier:
 
             x_pred = jax.vmap(one_step)(qpos_in, qvel_in, u_in)
             err = x_pred - x_tgt
-            return jnp.sum(jnp.square(err))
+            return jnp.mean(jnp.square(err))
 
         # Sample θ population
         rng, sample_rng = jax.random.split(params.rng)

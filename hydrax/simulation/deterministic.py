@@ -102,7 +102,6 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     if identifier is not None:
         jit_identifier_update = jax.jit(identifier.update)
         print("System identification enabled")
-        print(f"theta_0: {identifier.params().mean}\n")
 
     # Warm-up the controller
     print("Jitting the controller...")
@@ -195,12 +194,13 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 id_start = time.time()
                 model_params = jit_identifier_update(model_params)
                 id_time = time.time() - id_start
-                # print("\n")
-                # print(f"theta_hat: \n {model_params.mean}")
-                # print(
-                #     f"theta ground truth: \n{mj_model.actuator_gainprm[:, 0]}"
-                # )
-                # print("\n")
+                print("\n")
+                print(f"theta_hat: \n {model_params.mean}")
+                print(
+                    f"theta ground truth: \n{mj_model.actuator_gainprm[:, 0]}"
+                )
+                print(f"cov: \n{model_params.cov}")
+                print("\n")
                 # Update controller internal model
                 mjx_model = mjx_model.tree_replace(
                     controller.task.apply_params_fn(
