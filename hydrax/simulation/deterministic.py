@@ -85,6 +85,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     # Initialize the controller
     mjx_model = mjx.put_model(mj_model)
     if identifier is not None:
+        id_time = 0.0
         model_params = identifier.params()
     else:
         model_params = None
@@ -106,8 +107,8 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     # Warm-up the controller
     print("Jitting the controller...")
     st = time.time()
-    policy_params, rollouts = jit_optimize(mjx_model, mjx_data, policy_params)
-    policy_params, rollouts = jit_optimize(mjx_model, mjx_data, policy_params)
+    policy_params, rollouts = jit_optimize(mjx_data, policy_params)
+    policy_params, rollouts = jit_optimize(mjx_data, policy_params)
 
     tq = jnp.arange(0, sim_steps_per_replan) * mj_model.opt.timestep
     tk = policy_params.tk
@@ -194,24 +195,27 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 id_start = time.time()
                 model_params = jit_identifier_update(model_params)
                 id_time = time.time() - id_start
-                print(f"ID time: {id_time:.3f}s")
-                print(f"theta_hat: \n {model_params.mean}")
-                print(
-                    f"theta ground truth: \n{mj_model.actuator_gainprm[:, 0]}"
-                )
-                print("\n")
+                # print("\n")
+                # print(f"theta_hat: \n {model_params.mean}")
+                # print(
+                #     f"theta ground truth: \n{mj_model.actuator_gainprm[:, 0]}"
+                # )
+                # print("\n")
                 # Update controller internal model
                 mjx_model = mjx_model.tree_replace(
                     controller.task.apply_params_fn(
                         mjx_model, model_params.mean
                     )
                 )
-
-            # Do a replanning step
-            plan_start = time.time()
-            policy_params, rollouts = jit_optimize(
-                mjx_model, mjx_data, policy_params
-            )
+                # Do a replanning step with the updated model
+                plan_start = time.time()
+                policy_params, rollouts = jit_optimize(
+                    mjx_data, policy_params, mjx_model
+                )
+            else:
+                # Do a replanning step with the original model
+                plan_start = time.time()
+                policy_params, rollouts = jit_optimize(mjx_data, policy_params)
             plan_time = time.time() - plan_start
 
             # Visualize the rollouts
@@ -281,6 +285,8 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             status_msg = (
                 f"Realtime rate: {rtr:.2f}, plan time: {plan_time:.4f}s"
             )
+            if identifier is not None:
+                status_msg += f", ID time: {id_time:.4f}s"
             print(status_msg, end="\r")
 
     # Preserve the last printout

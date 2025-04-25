@@ -102,6 +102,7 @@ class SamplingBasedController(ABC):
         # Use a single model (no domain randomization) by default
         self.model = task.model
         self.randomized_axes = None
+        self.seed = seed
 
         if self.num_randomizations > 1:
             # Make domain randomized models
@@ -118,7 +119,7 @@ class SamplingBasedController(ABC):
             )
 
     def optimize(
-        self, model: mjx.Model, state: mjx.Data, params: Any
+        self, state: mjx.Data, params: Any, new_model: mjx.Model = None
     ) -> Tuple[Any, Trajectory]:
         """Perform an optimization step to update the policy parameters.
 
@@ -131,7 +132,26 @@ class SamplingBasedController(ABC):
             Updated policy parameters
             Rollouts used to update the parameters
         """
-        self.model = model
+        if new_model is not None:
+            self.model = new_model
+
+            if self.num_randomizations > 1:
+                # Make domain randomized models
+                rng = jax.random.key(self.seed)
+                rng, subrng = jax.random.split(rng)
+                subrngs = jax.random.split(subrng, self.num_randomizations)
+                randomizations = jax.vmap(self.task.domain_randomize_model)(
+                    subrngs
+                )
+                self.model = self.task.model.tree_replace(randomizations)
+
+                # Keep track of which elements of the model have randomization
+                self.randomized_axes = jax.tree.map(
+                    lambda x: None, self.task.model
+                )
+                self.randomized_axes = self.randomized_axes.tree_replace(
+                    {key: 0 for key in randomizations.keys()}
+                )
 
         # Warm-start spline by advancing knot times by sim dt, then recomputing
         # the mean knots by evaluating the old spline at those times
