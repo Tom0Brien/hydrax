@@ -49,3 +49,28 @@ class Particle(Task):
         """Randomly shift the measured particle position."""
         shift = jax.random.uniform(rng, (2,), minval=-0.01, maxval=0.01)
         return {"qpos": data.qpos + shift}
+
+    def apply_params_fn(self, model, theta):
+        """Apply parameters to the model.
+
+        For the particle task, the parameters are the actuator gains.
+
+        Args:
+            model: The MuJoCo mjx.Model.
+            theta: The parameter vector to apply (actuator gains).
+
+        Returns:
+            Dictionary of updated model parameters.
+        """
+        new_gains = self.model.actuator_gainprm.at[:, 0].set(theta)
+        return {"actuator_gainprm": new_gains}
+
+    def get_param_dim(self):
+        """Get the dimension of the parameter vector for this task.
+
+        For the particle task, we have one parameter per actuator.
+
+        Returns:
+            Number of parameters to identify.
+        """
+        return self.mj_model.nu

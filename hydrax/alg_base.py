@@ -117,10 +117,13 @@ class SamplingBasedController(ABC):
                 {key: 0 for key in randomizations.keys()}
             )
 
-    def optimize(self, state: mjx.Data, params: Any) -> Tuple[Any, Trajectory]:
+    def optimize(
+        self, model: mjx.Model, state: mjx.Data, params: Any
+    ) -> Tuple[Any, Trajectory]:
         """Perform an optimization step to update the policy parameters.
 
         Args:
+            model: Updated model to use for rollouts.
             state: The initial state x₀.
             params: The current policy parameters, U ~ π(params).
 
@@ -128,6 +131,8 @@ class SamplingBasedController(ABC):
             Updated policy parameters
             Rollouts used to update the parameters
         """
+        self.model = model
+
         # Warm-start spline by advancing knot times by sim dt, then recomputing
         # the mean knots by evaluating the old spline at those times
         tk = params.tk

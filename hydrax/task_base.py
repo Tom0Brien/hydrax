@@ -83,7 +83,6 @@ class Task(ABC):
         """
         pass
 
-    @abstractmethod
     def constraint_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
         """The constraint cost c(xₜ, uₜ).
 
@@ -144,4 +143,26 @@ class Task(ABC):
         Returns:
             A dictionary of randomized data elements.
         """
+        return {}
+
+    def apply_params_fn(self, model_template, theta):
+        """Apply parameter vector theta to the model template.
+
+        This function defines how the parameter vector theta should be applied
+        to modify the model_template. By default, it does nothing (returns an
+        empty dictionary), meaning no parameters are modified.
+
+        Override this method in task subclasses to specify how parameters
+        should be applied for system identification.
+
+        Args:
+            model_template: The MuJoCo mjx.Model template to modify.
+            theta: The parameter vector to apply.
+
+        Returns:
+            A dictionary of model parameters that can be used with
+            model_template.tree_replace() to create a new model with the
+            specified parameters applied.
+        """
+        # Default implementation: no parameters to modify
         return {}
