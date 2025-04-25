@@ -65,10 +65,10 @@ else:  # Default to CEM
     print("Using CEM controller")
     controller = CEM(
         task,
-        num_samples=32,
+        num_samples=64,
         num_elites=8,
         sigma_start=0.2,
-        sigma_min=0.1,
+        sigma_min=0.01,
         explore_fraction=0.5,
         plan_horizon=0.25,
         spline_type="zero",
@@ -82,11 +82,12 @@ identifier = CEMIdentifier(
     model_template=mjx.put_model(task.mj_model),
     apply_params_fn=task.apply_params_fn,
     param_dim=task.get_param_dim(),
-    buffer_size=32,
-    num_samples=32,
+    buffer_size=64,
+    num_samples=64,
     num_elites=8,
     sigma_start=sigma_start,
-    sigma_min=0.05,
+    sigma_min=0.01,
+    explore_fraction=0.5,
     seed=0,
 )
 
@@ -103,7 +104,7 @@ identifier.init_params(initial_id_params)
 mj_model = task.mj_model
 # Intentionally perturb the actuator gains to test identification
 for i in range(mj_model.nu):
-    mj_model.actuator_gainprm[i, 0] *= 1.5  # Increase gains
+    mj_model.actuator_gainprm[i, 0] *= 1.25  # Increase gains
 
 # Initialize data with default state
 mj_data = mujoco.MjData(mj_model)

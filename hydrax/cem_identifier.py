@@ -41,6 +41,7 @@ class CEMIdentifier:
         num_elites: int,
         sigma_start: float,
         sigma_min: float,
+        explore_fraction: float = 0.0,
         seed: int = 0,
     ) -> None:
         self._model_template = model_template
@@ -50,9 +51,16 @@ class CEMIdentifier:
         self._buf_x: Deque[Array] = deque(maxlen=buffer_size + 1)
         self._buf_u: Deque[Array] = deque(maxlen=buffer_size + 1)
 
+        if not 0 <= explore_fraction <= 1:
+            raise ValueError(
+                f"explore_fraction must be between 0 and 1, got {explore_fraction}"
+            )
+
         self._num_samples = int(num_samples)
         self._num_elites = int(num_elites)
         self._sigma_min = float(sigma_min)
+        self._sigma_start = float(sigma_start)
+        self._num_explore = int(self._num_samples * explore_fraction)
 
         rng = jax.random.key(seed)
         self._params = IDParams(
@@ -113,12 +121,32 @@ class CEMIdentifier:
             err = x_pred - x_tgt
             return jnp.mean(jnp.square(err))
 
-        # Sample θ population
-        rng, sample_rng = jax.random.split(params.rng)
-        eps = jax.random.normal(
-            sample_rng, (self._num_samples, params.mean.size)
+        # Split the random keys for main samples and exploration samples
+        rng, sample_rng, explore_rng = jax.random.split(params.rng, 3)
+
+        # Calculate the number of main samples
+        num_main = self._num_samples - self._num_explore
+
+        # Sample main population
+        main_eps = (
+            jax.random.normal(sample_rng, (num_main, params.mean.size))
+            if num_main > 0
+            else jnp.empty((0, params.mean.size))
         )
-        thetas = params.mean + params.cov * eps
+        main_thetas = params.mean + params.cov * main_eps
+
+        # Sample exploration population with initial wide covariance
+        explore_eps = (
+            jax.random.normal(
+                explore_rng, (self._num_explore, params.mean.size)
+            )
+            if self._num_explore > 0
+            else jnp.empty((0, params.mean.size))
+        )
+        explore_thetas = params.mean + self._sigma_start * explore_eps
+
+        # Combine both sets of samples
+        thetas = jnp.concatenate([main_thetas, explore_thetas])
 
         # Roll out thetas and compute losses
         losses = jax.vmap(loss_single)(thetas)
