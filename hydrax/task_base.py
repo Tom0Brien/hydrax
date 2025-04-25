@@ -83,7 +83,6 @@ class Task(ABC):
         """
         pass
 
-    @abstractmethod
     def constraint_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
         """The constraint cost c(xₜ, uₜ).
 
