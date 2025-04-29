@@ -49,7 +49,8 @@ mj_model.opt.timestep = 0.01
 mj_model.opt.iterations = 10
 mj_model.opt.ls_iterations = 50
 mj_model.opt.o_solimp = [0.9, 0.95, 0.001, 0.5, 2]
-mj_model.opt.enableflags = mujoco.mjtEnableBit.mjENBL_OVERRIDE
+# TODO: Figure out how to enable this flag
+# mj_model.opt.enableflags = mujoco.mjtEnableBit.mjENBL_OVERRIDE
 
 # Set the initial state
 mj_data = mujoco.MjData(mj_model)
