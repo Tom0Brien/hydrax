@@ -194,13 +194,6 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 id_start = time.time()
                 model_params = jit_identifier_update(model_params)
                 id_time = time.time() - id_start
-                print("\n")
-                print(f"theta_hat: \n {model_params.mean}")
-                print(
-                    f"theta ground truth: \n{mj_model.actuator_gainprm[:, 0]}"
-                )
-                print(f"cov: \n{model_params.cov}")
-                print("\n")
                 # Update controller internal model
                 mjx_model = mjx_model.tree_replace(
                     controller.task.apply_params_fn(
@@ -212,6 +205,19 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 policy_params, rollouts = jit_optimize(
                     mjx_data, policy_params, mjx_model
                 )
+
+                print("\n")
+                param_dict = controller.task.apply_params_fn(
+                    mjx_model, model_params.mean
+                )
+                for field, est_value in param_dict.items():
+                    print(f"{field}:")
+                    print(f"  estimated: {est_value}")
+                    if hasattr(mj_model, field):
+                        print(f"  actual:    {getattr(mj_model, field)}")
+                    else:
+                        print(f"  mj_model has no field '{field}'")
+                print("\n")
             else:
                 # Do a replanning step with the original model
                 plan_start = time.time()
