@@ -4,10 +4,10 @@ import jax
 import jax.numpy as jnp
 import mujoco
 from mujoco import mjx
+from mujoco.mjx._src.math import quat_sub
 
 from hydrax import ROOT
 from hydrax.task_base import Task
-from hydrax.utils.math import mat_to_quat, orientation_error
 
 
 class PushBox(Task):
@@ -23,70 +23,75 @@ class PushBox(Task):
             sim_steps_per_control_step: The number of simulation steps per control step.
             gain_mode: The gain optimization mode to use (NONE, INDIVIDUAL, or SIMPLE).
         """
-        mj_model = mujoco.MjModel.from_xml_path(ROOT + "/models/pushbox/scene.xml")
+        mj_model = mujoco.MjModel.from_xml_path(
+            ROOT + "/models/pushbox/scene.xml"
+        )
 
         super().__init__(
             mj_model,
             trace_sites=["pusher"],
         )
 
-        # Get sensor ids
-        self.box_id = mj_model.body("box").id
+        # Get ids
+        self.box_body_id = mj_model.body("box").id
+        self.box_geom_id = mj_model.geom("box_geom").id
         self.pusher_id = mj_model.body("pusher").id
-        self.reference_id = mj_model.site("reference").id
+        self.box_position_sensor = mujoco.mj_name2id(
+            mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "box_position"
+        )
+        self.box_orientation_sensor = mujoco.mj_name2id(
+            mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "box_orientation"
+        )
+
+    def _get_box_position(self, state: mjx.Data) -> jax.Array:
+        sensor_adr = self.model.sensor_adr[self.box_position_sensor]
+        return state.sensordata[sensor_adr : sensor_adr + 3]
+
+    def _get_box_orientation(self, state: mjx.Data) -> jax.Array:
+        sensor_adr = self.model.sensor_adr[self.box_orientation_sensor]
+        return state.sensordata[sensor_adr : sensor_adr + 4]
+
+    def _get_box_orientation_err(self, state: mjx.Data) -> jax.Array:
+        """Orientation error between box and goal as quaternion difference."""
+        box_quat = self._get_box_orientation(state)
+        goal_quat = state.mocap_quat[0]
+        return quat_sub(box_quat, goal_quat)
 
     def _close_to_block_err(self, state: mjx.Data) -> jax.Array:
         """Position of the pusher relative to the desired pushing position."""
-        # Get current box position
-        current_box_pos = state.xpos[self.box_id]
-        # Get desired box position from mocap
+        # Use sensor-based box position
+        current_box_pos = self._get_box_position(state)
         desired_box_pos = state.mocap_pos[0]
-
-        # Calculate direction vector from box to goal
         box_to_goal = desired_box_pos - current_box_pos
-        # Normalize the direction vector
         distance = jnp.linalg.norm(box_to_goal)
-        direction = box_to_goal / jnp.maximum(distance, 1e-6)  # Avoid division by zero
-        # Calculate desired pusher position: 5cm back from box along this direction
-        desired_pusher_pos = current_box_pos - 0.05 * direction  # 5cm offset
-
-        # Get current pusher position
+        direction = box_to_goal / jnp.maximum(distance, 1e-6)
+        desired_pusher_pos = current_box_pos - 0.05 * direction
         pusher_pos = state.xpos[self.pusher_id]
         return pusher_pos - desired_pusher_pos
 
     def running_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
         """The running cost ℓ(xₜ, uₜ)."""
-        # Get current box position and orientation
-        current_box_pos = state.xpos[self.box_id]
-        box_rot = state.xmat[self.box_id].reshape((3, 3))
-        box_quat = mat_to_quat(box_rot)
-
-        # Get desired box position and orientation from mocap
+        current_box_pos = self._get_box_position(state)
+        box_orientation_err = self._get_box_orientation_err(state)
         desired_box_pos = state.mocap_pos[0]
-        desired_box_orientation = state.mocap_quat[0]
-
-        # Calculate costs
         box_pos_cost = jnp.sum(jnp.square(current_box_pos - desired_box_pos))
-        box_orientation_cost = jnp.sum(
-            jnp.square(orientation_error(box_quat, desired_box_orientation, box_rot))
-        )
-
-        # Calculate pusher position cost
+        box_orientation_cost = jnp.sum(jnp.square(box_orientation_err))
         pusher_err = self._close_to_block_err(state)
         box_to_pusher_cost = jnp.sum(jnp.square(pusher_err))
-
         control_cost = jnp.sum(jnp.square(state.actuator_force))
         return (
-            100.0 * box_pos_cost  # Box position
-            + 10.0 * box_orientation_cost  # Box orientation
-            + 40.0 * box_to_pusher_cost  # Close to box cost
-            + 0.001 * control_cost  # Control cost
+            100.0 * box_pos_cost
+            + 10.0 * box_orientation_cost
+            + 40.0 * box_to_pusher_cost
+            + 0.001 * control_cost
         )
 
     def terminal_cost(self, state: mjx.Data) -> jax.Array:
         """The terminal cost ℓ_T(x_T)."""
 
-        return self.running_cost(state, jnp.zeros_like(self.model.actuator_ctrlrange))
+        return self.running_cost(
+            state, jnp.zeros_like(self.model.actuator_ctrlrange)
+        )
 
     def domain_randomize_model(self, rng: jax.Array) -> Dict[str, jax.Array]:
         """Randomize the level of friction."""
@@ -96,3 +101,22 @@ class PushBox(Task):
             self.model.geom_friction[:, 0] * multiplier
         )
         return {"geom_friction": new_frictions}
+
+    def apply_params_fn(self, model, theta):
+        """Apply parameters to the model.
+
+        For PushBox, theta[0] is box mass, theta[1] is box sliding friction.
+        """
+        new_body_mass = model.body_mass.at[self.box_body_id].set(theta[0])
+        # Only update sliding friction (first column)
+        new_geom_friction = model.geom_friction.at[self.box_geom_id, 0].set(
+            theta[1]
+        )
+        return {
+            "body_mass": new_body_mass,
+            "geom_friction": new_geom_friction,
+        }
+
+    def get_param_dim(self):
+        """Number of parameters to identify: [box_mass, box_sliding_friction]."""
+        return 2

@@ -23,16 +23,16 @@
     <site name="reference" pos="0.0 0.0 0.04" size="0.01" rgba="1 0 0 0.0"/>
     
     <!-- Replace static goal with mocap body -->
-    <body name="goal" mocap="true" pos="0.0 0.1 0.04">
+    <body name="goal" mocap="true" pos="0.0 0.3 0.04">
       <geom class="goal" name="goal_cube" type="box" size="0.06 0.06 0.04"/>
     </body>
 
-    <body name="box" pos="0.0 0.0 0.04">
+    <body name="box" pos="0.0 0.2 0.04">
       <joint type="free"/>
       <geom name="box_geom" type="box" size="0.06 0.06 0.04" rgba="0.8 0.2 0.2 1"
             condim="3" friction="0.6" contype="2" conaffinity="1" solref="0.02 1" priority="1"/>
       <site name="box_site" pos="0 0 0" size="0.005"/>
-      <inertial pos="0 0 0" mass="0.15" diaginertia="0.001 0.001 0.001"/>
+      <inertial pos="0 0 0" mass="0.5" diaginertia="0.001 0.001 0.001"/>
     </body>
 
     <body name="pusher" pos="0 0.0 0.041">
@@ -47,4 +47,9 @@
     <position name="x" site="pusher" refsite="reference" gear="1 0 0 0 0 0" class="translation"/>
     <position name="y" site="pusher" refsite="reference" gear="0 1 0 0 0 0" class="translation"/>
   </actuator>
+
+  <sensor>
+    <framepos name="box_position" objtype="body" objname="box" reftype="site" refname="reference" />
+    <framequat name="box_orientation" objtype="body" objname="box" reftype="site" refname="reference"/>
+  </sensor>
 </mujoco>
