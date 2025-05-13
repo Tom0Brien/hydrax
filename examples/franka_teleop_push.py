@@ -40,17 +40,17 @@ subparsers.add_parser("rs", help="Uniform Random Search")
 args = parser.parse_args()
 
 # Set the controller based on command-line arguments
-if args.algorithm == "ps" or args.algorithm is None:
-    print("Running predictive sampling")
-    ctrl = PredictiveSampling(
+if args.algorithm == "cem" or args.algorithm is None:
+    print("Running CEM")
+    ctrl = CEM(
         task,
-        num_samples=16,
-        noise_level=0.1,
-        num_randomizations=10,
-        risk_strategy=WorstCase(),
-        plan_horizon=0.25,
+        num_samples=512,
+        sigma_start=0.1,
+        sigma_min=0.1,
+        num_elites=20,
+        plan_horizon=0.4,
         spline_type="zero",
-        num_knots=11,
+        num_knots=6,
     )
 
 elif args.algorithm == "mppi":
@@ -65,17 +65,17 @@ elif args.algorithm == "mppi":
         num_knots=11,
     )
 
-elif args.algorithm == "cem":
-    print("Running CEM")
-    ctrl = CEM(
+elif args.algorithm == "ps":
+    print("Running Predictive Sampling")
+    ctrl = PredictiveSampling(
         task,
-        num_samples=512,
-        sigma_start=0.1,
-        sigma_min=0.1,
-        num_elites=20,
-        plan_horizon=0.4,
+        num_samples=16,
+        noise_level=0.1,
+        num_randomizations=10,
+        risk_strategy=WorstCase(),
+        plan_horizon=0.25,
         spline_type="zero",
-        num_knots=6,
+        num_knots=11,
     )
 
 elif args.algorithm == "ccem":
