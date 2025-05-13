@@ -66,11 +66,11 @@ elif args.algorithm == "cem":
     print("Running CEM")
     ctrl = CEM(
         task,
-        num_samples=2000,
+        num_samples=128,
+        num_elites=16,
         sigma_start=0.1,
         sigma_min=0.005,
         explore_fraction=0.5,
-        num_elites=20,
         plan_horizon=0.5,
         spline_type="zero",
         num_knots=6,
