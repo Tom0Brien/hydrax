@@ -16,22 +16,7 @@ class FrankaReach(Task):
     def __init__(
         self,
     ):
-        """Load the MuJoCo model and set task parameters.
-
-        Args:
-            planning_horizon: The number of control steps (T) to plan over.
-            sim_steps_per_control_step: The number of simulation steps per control step.
-            control_mode: The control mode to use.
-                          CARTESIAN_SIMPLE_VI is recommended for Franka as it optimizes
-                          only translational and rotational p-gains with d-gains automatically set.
-            config: Optional dictionary with gain and control limit configurations. May include:
-                         For GENERAL_VI mode:
-                           'p_min', 'p_max', 'd_min', 'd_max'
-                         For CARTESIAN_SIMPLE_VI mode:
-                           'trans_p_min', 'trans_p_max', 'rot_p_min', 'rot_p_max'
-                         For CARTESIAN mode (fixed gains and limits):
-                           'trans_p', 'rot_p', 'pos_min', 'pos_max', 'rot_min', 'rot_max'
-        """
+        """Load the MuJoCo model and set task parameters."""
         mj_model = mujoco.MjModel.from_xml_path(
             ROOT + "/models/franka_emika_panda/mjx_scene_reach.xml"
         )
@@ -78,7 +63,10 @@ class FrankaReach(Task):
 
         # Penalize control effort (distance between reference and ee)
         control_cost = jnp.sum(
-            jnp.square(state.ctrl[:3] - state.site_xpos[self.ee_site_id])
+            jnp.square(
+                state.ctrl[:3]
+                - self.model.sensor_adr[self.gripper_position_sensor]
+            )
         )
         return (
             1e1 * position_cost + 1e0 * orientation_cost + 1e-2 * control_cost

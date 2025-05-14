@@ -307,4 +307,8 @@
     <framepos name="gripper_position" objtype="site" objname="gripper" reftype="site" refname="reference" />
     <framequat name="gripper_orientation" objtype="site" objname="gripper" reftype="site" refname="reference"/>
   </sensor>
+
+  <keyframe>
+    <key name="home" qpos="-0.196 -0.189 0.182 -2.1 0.0378 1.91 0.756 0 0" ctrl="0.5 0 0.5 -3.14  0 0"/>
+  </keyframe>
 </mujoco>
