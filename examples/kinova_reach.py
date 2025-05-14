@@ -1,0 +1,185 @@
+import argparse
+
+import evosax
+import mujoco
+from mujoco import mjx
+import jax.numpy as jnp
+
+from hydrax.algs import MPPI, CEM, Evosax, PredictiveSampling
+from hydrax.risk import WorstCase
+from hydrax.simulation.deterministic import run_interactive
+from hydrax.tasks.kinova_reach import KinovaReach
+
+"""
+Run an interactive simulation of the kinova reach task.
+
+Double click on the green target, then drag it around with [ctrl + right-click].
+"""
+
+# Define the task (cost and dynamics)
+task = KinovaReach()
+
+# Parse command-line arguments
+parser = argparse.ArgumentParser(
+    description="Run an interactive simulation of the kinova reach task."
+)
+subparsers = parser.add_subparsers(
+    dest="algorithm", help="Sampling algorithm (choose one)"
+)
+subparsers.add_parser("ps", help="Predictive Sampling")
+subparsers.add_parser("mppi", help="Model Predictive Path Integral Control")
+subparsers.add_parser("cem", help="Cross-Entropy Method")
+subparsers.add_parser("cmaes", help="CMA-ES")
+subparsers.add_parser(
+    "samr", help="Genetic Algorithm with Self-Adaptation Mutation Rate (SAMR)"
+)
+subparsers.add_parser("de", help="Differential Evolution")
+subparsers.add_parser("gld", help="Gradient-Less Descent")
+subparsers.add_parser("rs", help="Uniform Random Search")
+args = parser.parse_args()
+
+# Set the controller based on command-line arguments
+if args.algorithm == "ps" or args.algorithm is None:
+    print("Running predictive sampling")
+    ctrl = PredictiveSampling(
+        task,
+        num_samples=16,
+        noise_level=0.1,
+        num_randomizations=10,
+        risk_strategy=WorstCase(),
+        plan_horizon=0.25,
+        spline_type="zero",
+        num_knots=11,
+    )
+
+elif args.algorithm == "mppi":
+    print("Running MPPI")
+    ctrl = MPPI(
+        task,
+        num_samples=16,
+        noise_level=0.3,
+        temperature=0.01,
+        plan_horizon=0.25,
+        spline_type="zero",
+        num_knots=11,
+    )
+
+elif args.algorithm == "cem":
+    print("Running CEM")
+    ctrl = CEM(
+        task,
+        num_samples=2000,
+        sigma_start=0.1,
+        sigma_min=0.1,
+        num_elites=20,
+        plan_horizon=0.5,
+        spline_type="zero",
+        num_knots=6,
+    )
+elif args.algorithm == "cmaes":
+    print("Running CMA-ES")
+    ctrl = Evosax(
+        task,
+        evosax.Sep_CMA_ES,
+        num_samples=16,
+        elite_ratio=0.5,
+        plan_horizon=0.25,
+        spline_type="zero",
+        num_knots=11,
+    )
+
+elif args.algorithm == "samr":
+    print("Running genetic algorithm with Self-Adaptation Mutation Rate (SAMR)")
+    ctrl = Evosax(
+        task,
+        evosax.SAMR_GA,
+        num_samples=16,
+        plan_horizon=0.25,
+        spline_type="zero",
+        num_knots=11,
+    )
+
+elif args.algorithm == "de":
+    print("Running Differential Evolution (DE)")
+    ctrl = Evosax(
+        task,
+        evosax.DE,
+        num_samples=16,
+        plan_horizon=0.25,
+        spline_type="zero",
+        num_knots=11,
+    )
+
+elif args.algorithm == "gld":
+    print("Running Gradient-Less Descent (GLD)")
+    ctrl = Evosax(
+        task,
+        evosax.GLD,
+        num_samples=16,
+        plan_horizon=0.25,
+        spline_type="zero",
+        num_knots=11,
+    )
+
+elif args.algorithm == "rs":
+    print("Running uniform random search")
+    es_params = evosax.strategies.random.EvoParams(
+        range_min=-1.0,
+        range_max=1.0,
+    )
+    ctrl = Evosax(
+        task,
+        evosax.RandomSearch,
+        num_samples=16,
+        es_params=es_params,
+        plan_horizon=0.25,
+        spline_type="zero",
+        num_knots=11,
+    )
+else:
+    parser.error("Invalid algorithm")
+
+# Define the model used for simulation
+mj_model = task.mj_model
+mj_data = mujoco.MjData(mj_model)
+
+# Set initial joint positions for Kinova Gen3 (home position from gen3.xml)
+mj_data.qpos[:7] = [
+    0,
+    0.26179939,
+    3.14159265,
+    -2.26892803,
+    0,
+    0.95993109,
+    1.57079633,
+]
+
+# Initial conditions for controller (cartesian control)
+initial_knots = jnp.tile(
+    jnp.array(
+        [
+            0.0,  # x
+            0.0,  # y
+            0.0,  # z
+            0.0,  # rx
+            0.0,  # ry
+            0.0,  # rz
+        ]
+    ),
+    (ctrl.num_knots, 1),
+)
+
+# Verify cost is zero at beginning
+mujoco.mj_forward(mj_model, mj_data)
+mjx_data = mjx.put_data(mj_model, mj_data)
+
+# Run the interactive simulation
+run_interactive(
+    ctrl,
+    mj_model,
+    mj_data,
+    frequency=50,
+    show_traces=False,
+    max_traces=5,
+    initial_knots=initial_knots,
+)

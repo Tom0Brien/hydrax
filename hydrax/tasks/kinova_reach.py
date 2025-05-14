@@ -1,0 +1,76 @@
+from typing import Dict
+
+import jax
+import jax.numpy as jnp
+import mujoco
+from mujoco import mjx
+
+from hydrax import ROOT
+from hydrax.task_base import Task
+from mujoco.mjx._src.math import quat_sub
+
+
+class KinovaReach(Task):
+    """Kinova Gen3 to reach a target position."""
+
+    def __init__(
+        self,
+    ):
+        """Load the MuJoCo model and set task parameters."""
+        mj_model = mujoco.MjModel.from_xml_path(
+            ROOT + "/models/kinova_gen3/scene.xml"
+        )
+
+        super().__init__(
+            mj_model,
+            trace_sites=["gripper"],
+        )
+
+        # Get sensor ids
+        self.gripper_position_sensor = mujoco.mj_name2id(
+            mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "gripper_position"
+        )
+        self.gripper_orientation_sensor = mujoco.mj_name2id(
+            mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "gripper_orientation"
+        )
+
+    def _get_gripper_position_err(self, state: mjx.Data) -> jax.Array:
+        """Position of the gripper relative to the target grasp position."""
+        gripper_position = self.model.sensor_adr[self.gripper_position_sensor]
+        desired_position = state.mocap_pos[0]
+        return (
+            state.sensordata[gripper_position : gripper_position + 3]
+            - desired_position
+        )
+
+    def _get_gripper_orientation_err(self, state: mjx.Data) -> jax.Array:
+        """Orientation of the gripper relative to the target grasp orientation."""
+        sensor_adr = self.model.sensor_adr[self.gripper_orientation_sensor]
+        gripper_quat = state.sensordata[sensor_adr : sensor_adr + 4]
+
+        # Quaternion subtraction gives us rotation relative to goal
+        goal_quat = state.mocap_quat[0]
+        return mjx._src.math.quat_sub(gripper_quat, goal_quat)
+
+    def running_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
+        """The running cost ℓ(xₜ, uₜ) encourages target tracking."""
+        position_cost = jnp.sum(
+            jnp.square(self._get_gripper_position_err(state))
+        )
+        orientation_cost = jnp.sum(
+            jnp.square(self._get_gripper_orientation_err(state))
+        )
+        # Penalize control effort (distance between reference and ee)
+        control_cost = jnp.sum(
+            jnp.square(
+                state.ctrl[:3]
+                - self.model.sensor_adr[self.gripper_position_sensor]
+            )
+        )
+        return (
+            1e1 * position_cost + 1e0 * orientation_cost + 1e-2 * control_cost
+        )
+
+    def terminal_cost(self, state: mjx.Data) -> jax.Array:
+        """The terminal cost ϕ(x_T)."""
+        return self.running_cost(state, state.ctrl)
