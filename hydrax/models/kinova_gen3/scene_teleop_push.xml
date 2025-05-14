@@ -3,9 +3,10 @@
 
   <statistic center="0.3 0 0.45" extent="0.8" meansize="0.05"/>
 
-  <option timestep="0.005" iterations="5" ls_iterations="8" integrator="implicitfast">
+  <option timestep="0.005" iterations="1" ls_iterations="5" integrator="implicitfast" impratio="0.1">
     <flag eulerdamp="disable"/>
   </option>
+
   <custom>
     <numeric data="6" name="max_contact_points"/>
     <numeric data="6" name="max_geom_pairs"/>
@@ -35,10 +36,10 @@
     <!-- table -->
     <body name="table" pos="0.5 0 0">
       <!-- Virtual boundary visualization -->
-      <geom name="bound_x_pos" type="box" size="0.01 0.35 0.02" pos="0.35 0 0.0" material="boundary" contype="0" conaffinity="0"/>
-      <geom name="bound_x_neg" type="box" size="0.01 0.35 0.02" pos="-0.35 0 0.0" material="boundary" contype="0" conaffinity="0"/>
-      <geom name="bound_y_pos" type="box" size="0.35 0.01 0.02" pos="0 0.35 0.0" material="boundary" contype="0" conaffinity="0"/>
-      <geom name="bound_y_neg" type="box" size="0.35 0.01 0.02" pos="0 -0.35 0.0" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_x_pos" type="box" size="0.01 0.2 0.02" pos="0.2 0 0.0" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_x_neg" type="box" size="0.01 0.2 0.02" pos="-0.2 0 0.0" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_y_pos" type="box" size="0.2 0.01 0.02" pos="0 0.2 0.0" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_y_neg" type="box" size="0.2 0.01 0.02" pos="0 -0.2 0.0" material="boundary" contype="0" conaffinity="0"/>
     </body>
 
     <!-- pushable box -->
@@ -51,8 +52,9 @@
     </body>
 
     <!-- Teleoperation goal (mocap body) -->
-    <body name="goal" mocap="true" pos="0.5 0.0 0.4" euler="-1.571 -1.571 0">
-      <geom type="sphere" size=".02" contype="0" conaffinity="0" rgba="0 1 0 .5" />
+    <body name="goal" mocap="true" pos="0.45666519 0.0013501  0.43372431" euler="0 0 1.571"  >
+      <geom type="sphere" size=".02" contype="0" conaffinity="0" rgba="0 1 0 .5"/>
+      <site name="goal" rgba="0 1 0 .5" group="1" size="0.01"/>
     </body>
   </worldbody>
 
@@ -63,7 +65,7 @@
   </sensor>
 
   <keyframe>
-    <key name="home" qpos="0 0.26179939 3.14159265 -2.26892803 0 0.95993109 1.57079633 0 0 0 0 0 0 0"
-      ctrl="0 0 0 0 0 0"/>
+    <key name="home" qpos="-0.00877 0.368 3.15 -1.45 -0.00451 -1.33 1.58 0.5 0 0 0 0 0 0"
+      ctrl="0.45666519 0.0013501 0.43372431 0 0 1.571"/>
   </keyframe>
 </mujoco> 

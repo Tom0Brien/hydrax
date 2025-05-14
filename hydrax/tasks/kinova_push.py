@@ -50,6 +50,10 @@ class KinovaPush(Task):
         self.table_size = jnp.array(
             [0.35, 0.35]
         )  # Safe area size (slightly smaller than table)
+        # Desired end effector orientation quaternion
+        self.desired_ee_quat = jnp.array(
+            [0.70710678, 0.0, 0.0, 0.70710678]
+        )  # [w, x, y, z]
 
     def _get_box_position_err(self, state: mjx.Data) -> jax.Array:
         """Position of the box relative to the target position."""
@@ -85,6 +89,12 @@ class KinovaPush(Task):
         gripper_position = state.sensordata[sensor_adr : sensor_adr + 3]
         return gripper_position - desired_gripper_pos
 
+    def _get_gripper_orientation_err(self, state: mjx.Data) -> jax.Array:
+        """Orientation of the gripper relative to the desired pushing orientation."""
+        sensor_adr = self.model.sensor_adr[self.gripper_orientation_sensor]
+        gripper_quat = state.sensordata[sensor_adr : sensor_adr + 4]
+        return mjx._src.math.quat_sub(gripper_quat, self.desired_ee_quat)
+
     def running_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
         """The running cost ℓ(xₜ, uₜ) encourages pushing the box to the goal."""
         box_pos_cost = jnp.sum(jnp.square(self._get_box_position_err(state)))
@@ -94,12 +104,16 @@ class KinovaPush(Task):
         gripper_pos_cost = jnp.sum(
             jnp.square(self._get_gripper_position_err(state))
         )
+        gripper_orientation_cost = jnp.sum(
+            jnp.square(self._get_gripper_orientation_err(state))
+        )
         control_cost = jnp.sum(jnp.square(state.actuator_force))
 
         return (
             1e3 * box_pos_cost  # Box position
             + 10.0 * box_orientation_cost  # Box orientation
             + 40.0 * gripper_pos_cost  # Close to box cost
+            + 10.0 * gripper_orientation_cost  # Gripper goal orientation cost
             + 0.001 * control_cost  # Control effort
         )
 

@@ -48,48 +48,52 @@ class KinovaTeleopPush(Task):
             [0.5, 0.0, 0.03]
         )  # Center of the table surface
         self.table_size = jnp.array(
-            [0.35, 0.35]
+            [0.2, 0.2]
         )  # Safe area size (slightly smaller than table)
 
         # Minimum height above table for gripper (5 cm)
         self.min_gripper_height = 0.0
-
-    def _get_gripper_position_err(self, state: mjx.Data) -> jax.Array:
-        """Position of the gripper relative to the target position."""
-        sensor_adr = self.model.sensor_adr[self.gripper_position_sensor]
-        gripper_position = state.sensordata[sensor_adr : sensor_adr + 3]
-        desired_position = state.mocap_pos[0]
-        return gripper_position - desired_position
-
-    def _get_gripper_orientation_err(self, state: mjx.Data) -> jax.Array:
-        """Orientation of the gripper relative to the target orientation."""
-        sensor_adr = self.model.sensor_adr[self.gripper_orientation_sensor]
-        gripper_quat = state.sensordata[sensor_adr : sensor_adr + 4]
-        goal_quat = state.mocap_quat[0]
-        return mjx._src.math.quat_sub(gripper_quat, goal_quat)
 
     def _get_box_position(self, state: mjx.Data) -> jax.Array:
         """Position of the box."""
         sensor_adr = self.model.sensor_adr[self.box_position_sensor]
         return state.sensordata[sensor_adr : sensor_adr + 3]
 
+    def _get_gripper_position_err(self, state: mjx.Data) -> jax.Array:
+        """Position of the gripper relative to the target grasp position."""
+        gripper_position = self.model.sensor_adr[self.gripper_position_sensor]
+        desired_position = state.mocap_pos[0]
+        return (
+            state.sensordata[gripper_position : gripper_position + 3]
+            - desired_position
+        )
+
+    def _get_gripper_orientation_err(self, state: mjx.Data) -> jax.Array:
+        """Orientation of the gripper relative to the target grasp orientation."""
+        sensor_adr = self.model.sensor_adr[self.gripper_orientation_sensor]
+        gripper_quat = state.sensordata[sensor_adr : sensor_adr + 4]
+
+        # Quaternion subtraction gives us rotation relative to goal
+        goal_quat = state.mocap_quat[0]
+        return mjx._src.math.quat_sub(gripper_quat, goal_quat)
+
     def running_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
-        """The running cost ℓ(xₜ, uₜ) encourages teleoperating the gripper to the goal."""
-        # Gripper position and orientation tracking costs
+        """The running cost ℓ(xₜ, uₜ) encourages target tracking."""
         position_cost = jnp.sum(
             jnp.square(self._get_gripper_position_err(state))
         )
         orientation_cost = jnp.sum(
             jnp.square(self._get_gripper_orientation_err(state))
         )
-
-        # Control effort cost
-        control_cost = jnp.sum(jnp.square(state.actuator_force))
-
+        # Penalize control effort (distance between reference and ee)
+        control_cost = jnp.sum(
+            jnp.square(
+                state.ctrl[:3]
+                - self.model.sensor_adr[self.gripper_position_sensor]
+            )
+        )
         return (
-            100.0 * position_cost  # Gripper position
-            + 10.0 * orientation_cost  # Gripper orientation
-            + 0.001 * control_cost  # Control effort
+            1e1 * position_cost + 1e0 * orientation_cost + 1e-2 * control_cost
         )
 
     def terminal_cost(self, state: mjx.Data) -> jax.Array:

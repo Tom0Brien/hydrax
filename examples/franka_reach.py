@@ -173,7 +173,7 @@ run_interactive(
     ctrl,
     mj_model,
     mj_data,
-    frequency=50,
+    frequency=25,
     show_traces=False,
     max_traces=5,
     initial_knots=initial_knots,

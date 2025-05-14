@@ -72,7 +72,7 @@ elif args.algorithm == "cem":
         sigma_start=0.1,
         sigma_min=0.001,
         num_elites=20,
-        plan_horizon=0.25,
+        plan_horizon=0.5,
         explore_fraction=0.5,
         spline_type="zero",
         num_knots=6,
@@ -159,26 +159,33 @@ mj_data = mujoco.MjData(mj_model)
 
 # Set initial joint positions for the Kinova Gen3 robot
 # Using the "home" keyframe values from scene_box_push.xml
-mj_data.qpos[:7] = [
+mj_data.qpos = [
+    -0.00877,
+    0.368,
+    3.15,
+    -1.45,
+    -0.00451,
+    -1.33,
+    1.58,
+    0.5,
     0,
-    0.26179939,
-    3.14159265,
-    -2.26892803,
+    0.03,
     0,
-    0.95993109,
-    1.57079633,
+    0,
+    0,
+    0,
 ]
 
-# Initial conditions for controller - Cartesian position, orientation
+# Initial conditions for controller (cartesian control)
 initial_knots = jnp.tile(
     jnp.array(
         [
-            0.0,  # x
-            0.0,  # y
-            0.0,  # z
-            0.0,  # rx
-            0.0,  # ry
-            0.0,  # rz
+            0.45666519,  # x
+            0.0013501,  # y
+            0.43372431,  # z
+            0,  # rx
+            0,  # ry
+            1.571,  # rz
         ]
     ),
     (ctrl.num_knots, 1),
@@ -189,7 +196,7 @@ run_interactive(
     ctrl,
     mj_model,
     mj_data,
-    frequency=50,
+    frequency=25,
     show_traces=False,
     max_traces=5,
     initial_knots=initial_knots,

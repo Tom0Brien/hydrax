@@ -38,7 +38,7 @@
   </asset>
 
   <worldbody>
-    <site name="reference" pos="0.45666519 0.0013501 0.43372431" euler="-1.571 -1.571 0" size="0.01" rgba="1 0 0 0"/>
+    <site name="reference" pos="0 0 0" euler="0 0 0" size="0.01" rgba="1 0 0 0"/>
     
     <body name="base_link">
       <inertial pos="-0.000648 -0.000166 0.084487" quat="0.999294 0.00139618 -0.0118387 0.035636" mass="1.697"

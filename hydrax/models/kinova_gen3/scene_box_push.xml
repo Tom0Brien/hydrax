@@ -3,9 +3,10 @@
 
   <statistic center="0.3 0 0.45" extent="0.8" meansize="0.05"/>
 
-  <option timestep="0.01" iterations="4"  ls_iterations="10" integrator="implicitfast" impratio="0.1">
+  <option timestep="0.005" iterations="1" ls_iterations="5" integrator="implicitfast" impratio="0.1">
     <flag eulerdamp="disable"/>
   </option>
+
   <custom>
     <numeric data="6" name="max_contact_points"/>
     <numeric data="6" name="max_geom_pairs"/>
@@ -61,8 +62,8 @@
   </sensor>
 
   <keyframe>
-    <key name="home" qpos="0 0.26179939 3.14159265 -2.26892803 0 0.95993109 1.57079633 0 0 0 0 0 0 0"
-      ctrl="0 0 0 0 0 0"/>
+    <key name="home" qpos="-0.00877 0.368 3.15 -1.45 -0.00451 -1.33 1.58 0.5 0 0 0 0 0 0"
+      ctrl="0.45666519 0.0013501 0.43372431 0 0 1.571"/>
     <key name="retract" qpos="0 -0.34906585 3.14159265 -2.54818071 0 -0.87266463 1.57079633 0 0 0 0 0 0 0"
       ctrl="0 0 0 0 0 0"/>
   </keyframe>
