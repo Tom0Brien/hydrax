@@ -101,3 +101,22 @@ class PushBox(Task):
             self.model.geom_friction[:, 0] * multiplier
         )
         return {"geom_friction": new_frictions}
+
+    def apply_params_fn(self, model, theta):
+        """Apply parameters to the model.
+
+        For PushBox, theta[0] is box mass, theta[1] is box sliding friction.
+        """
+        new_body_mass = model.body_mass.at[self.box_body_id].set(theta[0])
+        # Only update sliding friction (first column)
+        new_geom_friction = model.geom_friction.at[self.box_geom_id, 0].set(
+            theta[1]
+        )
+        return {
+            "body_mass": new_body_mass,
+            "geom_friction": new_geom_friction,
+        }
+
+    def get_param_dim(self):
+        """Number of parameters to identify: [box_mass, box_sliding_friction]."""
+        return 2

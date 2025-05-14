@@ -12,6 +12,7 @@ from mujoco import mjx
 from hydrax.alg_base import SamplingBasedController
 from hydrax import ROOT
 from hydrax.utils.video import VideoRecorder
+from hydrax.cem_identifier import CEMIdentifier
 
 """
 Tools for deterministic (synchronous) simulation, with the simulator and
@@ -33,6 +34,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     reference: np.ndarray = None,
     reference_fps: float = 30.0,
     record_video: bool = False,
+    identifier: CEMIdentifier = None,
 ) -> None:
     """Run an interactive simulation with the MPC controller.
 
@@ -60,6 +62,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         reference: The reference trajectory (qs) to visualize.
         reference_fps: The frame rate of the reference trajectory.
         record_video: Whether to record a video of the simulation.
+        identifier: Optional CEMIdentifier for system identification during simulation.
     """
     # Report the planning horizon in seconds for debugging
     print(
@@ -80,6 +83,12 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     )
 
     # Initialize the controller
+    mjx_model = mjx.put_model(mj_model)
+    if identifier is not None:
+        id_time = 0.0
+        model_params = identifier.params()
+    else:
+        model_params = None
     mjx_data = mjx.put_data(mj_model, mj_data)
     mjx_data = mjx_data.replace(
         mocap_pos=mj_data.mocap_pos, mocap_quat=mj_data.mocap_quat
@@ -87,6 +96,12 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     policy_params = controller.init_params(initial_knots=initial_knots)
     jit_optimize = jax.jit(controller.optimize)
     jit_interp_func = jax.jit(controller.interp_func)
+
+    # JIT the identifier update if provided
+    jit_identifier_update = None
+    if identifier is not None:
+        jit_identifier_update = jax.jit(identifier.update)
+        print("System identification enabled")
 
     # Warm-up the controller
     print("Jitting the controller...")
@@ -174,9 +189,39 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 time=mj_data.time,
             )
 
-            # Do a replanning step
-            plan_start = time.time()
-            policy_params, rollouts = jit_optimize(mjx_data, policy_params)
+            # Add observation to identifier if provided
+            if identifier is not None and identifier.ready():
+                id_start = time.time()
+                model_params = jit_identifier_update(model_params)
+                id_time = time.time() - id_start
+                # Update controller internal model
+                mjx_model = mjx_model.tree_replace(
+                    controller.task.apply_params_fn(
+                        mjx_model, model_params.mean
+                    )
+                )
+                # Do a replanning step with the updated model
+                plan_start = time.time()
+                policy_params, rollouts = jit_optimize(
+                    mjx_data, policy_params, mjx_model
+                )
+
+                print("\n")
+                param_dict = controller.task.apply_params_fn(
+                    mjx_model, model_params.mean
+                )
+                for field, est_value in param_dict.items():
+                    print(f"{field}:")
+                    print(f"  estimated: {est_value}")
+                    if hasattr(mj_model, field):
+                        print(f"  actual:    {getattr(mj_model, field)}")
+                    else:
+                        print(f"  mj_model has no field '{field}'")
+                print("\n")
+            else:
+                # Do a replanning step with the original model
+                plan_start = time.time()
+                policy_params, rollouts = jit_optimize(mjx_data, policy_params)
             plan_time = time.time() - plan_start
 
             # Visualize the rollouts
@@ -223,6 +268,9 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
             # simulate the system between spline replanning steps
             for i in range(sim_steps_per_replan):
+                # Add observation to identifier if enabled
+                if identifier is not None:
+                    identifier.observe(mj_data)
                 mj_data.ctrl[:] = np.array(us[i])
                 mujoco.mj_step(mj_model, mj_data)
                 viewer.sync()
@@ -240,10 +288,12 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
             # Print some timing information
             rtr = step_dt / (time.time() - start_time)
-            print(
-                f"Realtime rate: {rtr:.2f}, plan time: {plan_time:.4f}s",
-                end="\r",
+            status_msg = (
+                f"Realtime rate: {rtr:.2f}, plan time: {plan_time:.4f}s"
             )
+            if identifier is not None:
+                status_msg += f", ID time: {id_time:.4f}s"
+            print(status_msg, end="\r")
 
     # Preserve the last printout
     print("")
