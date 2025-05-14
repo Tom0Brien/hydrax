@@ -7,20 +7,21 @@ import jax.numpy as jnp
 from hydrax.algs import MPPI, CEM, CCEM, Evosax, PredictiveSampling
 from hydrax.risk import WorstCase
 from hydrax.simulation.deterministic import run_interactive
-from hydrax.tasks.kinova_push import KinovaPush
+from hydrax.tasks.kinova_teleop_push import KinovaTeleopPush
 
 """
-Run an interactive simulation of the kinova push task.
+Run an interactive simulation of the Kinova teleoperation push task.
 
 Double click on the green target, then drag it around with [ctrl + right-click].
+The Kinova arm will follow your commands while ensuring the box stays on the table.
 """
 
 # Define the task (cost and dynamics)
-task = KinovaPush()
+task = KinovaTeleopPush()
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(
-    description="Run an interactive simulation of the Kinova box pushing task."
+    description="Run an interactive simulation of the Kinova teleoperation push task."
 )
 subparsers = parser.add_subparsers(
     dest="algorithm", help="Sampling algorithm (choose one)"
@@ -70,13 +71,13 @@ elif args.algorithm == "cem":
         task,
         num_samples=512,
         sigma_start=0.1,
-        sigma_min=0.001,
+        sigma_min=0.1,
         num_elites=20,
-        plan_horizon=0.25,
-        explore_fraction=0.5,
+        plan_horizon=0.4,
         spline_type="zero",
         num_knots=6,
     )
+
 elif args.algorithm == "ccem":
     print("Running CCEM")
     ctrl = CCEM(
@@ -157,8 +158,7 @@ else:
 mj_model = task.mj_model
 mj_data = mujoco.MjData(mj_model)
 
-# Set initial joint positions for the Kinova Gen3 robot
-# Using the "home" keyframe values from scene_box_push.xml
+# Set initial joint positions for the Kinova Gen3 robot using the home position
 mj_data.qpos[:7] = [
     0,
     0.26179939,
@@ -173,10 +173,10 @@ mj_data.qpos[:7] = [
 initial_knots = jnp.tile(
     jnp.array(
         [
-            0.0,  # x
+            0.5,  # x
             0.0,  # y
-            0.0,  # z
-            0.0,  # rx
+            0.4,  # z
+            -3.14,  # rx
             0.0,  # ry
             0.0,  # rz
         ]
