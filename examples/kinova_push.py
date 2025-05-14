@@ -2,26 +2,25 @@ import argparse
 
 import evosax
 import mujoco
-from mujoco import mjx
 import jax.numpy as jnp
 
-from hydrax.algs import MPPI, CEM, Evosax, PredictiveSampling
+from hydrax.algs import MPPI, CEM, CCEM, Evosax, PredictiveSampling
 from hydrax.risk import WorstCase
 from hydrax.simulation.deterministic import run_interactive
-from hydrax.tasks.kinova_reach import KinovaReach
+from hydrax.tasks.kinova_push import KinovaPush
 
 """
-Run an interactive simulation of the kinova reach task.
+Run an interactive simulation of the kinova push task.
 
 Double click on the green target, then drag it around with [ctrl + right-click].
 """
 
 # Define the task (cost and dynamics)
-task = KinovaReach()
+task = KinovaPush()
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(
-    description="Run an interactive simulation of the kinova reach task."
+    description="Run an interactive simulation of the Kinova box pushing task."
 )
 subparsers = parser.add_subparsers(
     dest="algorithm", help="Sampling algorithm (choose one)"
@@ -29,6 +28,7 @@ subparsers = parser.add_subparsers(
 subparsers.add_parser("ps", help="Predictive Sampling")
 subparsers.add_parser("mppi", help="Model Predictive Path Integral Control")
 subparsers.add_parser("cem", help="Cross-Entropy Method")
+subparsers.add_parser("ccem", help="Constrained Cross-Entropy Method")
 subparsers.add_parser("cmaes", help="CMA-ES")
 subparsers.add_parser(
     "samr", help="Genetic Algorithm with Self-Adaptation Mutation Rate (SAMR)"
@@ -68,11 +68,25 @@ elif args.algorithm == "cem":
     print("Running CEM")
     ctrl = CEM(
         task,
-        num_samples=2000,
+        num_samples=512,
         sigma_start=0.1,
         sigma_min=0.1,
         num_elites=20,
-        plan_horizon=0.5,
+        plan_horizon=0.4,
+        spline_type="zero",
+        num_knots=6,
+    )
+
+elif args.algorithm == "ccem":
+    print("Running CCEM")
+    ctrl = CCEM(
+        task,
+        num_samples=512,
+        sigma_start=0.3,
+        sigma_min=0.1,
+        num_elites=20,
+        explore_fraction=0.5,
+        plan_horizon=0.4,
         spline_type="zero",
         num_knots=6,
     )
@@ -143,7 +157,8 @@ else:
 mj_model = task.mj_model
 mj_data = mujoco.MjData(mj_model)
 
-# Set initial joint positions for Kinova Gen3 (home position from gen3.xml)
+# Set initial joint positions for the Kinova Gen3 robot
+# Using the "home" keyframe values from scene_box_push.xml
 mj_data.qpos[:7] = [
     0,
     0.26179939,
@@ -154,7 +169,7 @@ mj_data.qpos[:7] = [
     1.57079633,
 ]
 
-# Initial conditions for controller (cartesian control)
+# Initial conditions for controller - Cartesian position, orientation
 initial_knots = jnp.tile(
     jnp.array(
         [
@@ -168,10 +183,6 @@ initial_knots = jnp.tile(
     ),
     (ctrl.num_knots, 1),
 )
-
-# Verify cost is zero at beginning
-mujoco.mj_forward(mj_model, mj_data)
-mjx_data = mjx.put_data(mj_model, mj_data)
 
 # Run the interactive simulation
 run_interactive(

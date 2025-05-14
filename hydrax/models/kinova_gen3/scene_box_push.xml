@@ -1,7 +1,7 @@
-<mujoco model="panda scene">
-  <include file="mjx_panda_cartesian.xml"/>
+<mujoco model="gen3 scene">
+  <include file="gen3.xml"/>
 
-  <statistic center="0.3 0 0.4" extent="1"/>
+  <statistic center="0.3 0 0.45" extent="0.8" meansize="0.05"/>
 
   <option timestep="0.01" iterations="4"  ls_iterations="10" integrator="implicitfast" impratio="0.1">
     <flag eulerdamp="disable"/>
@@ -12,10 +12,9 @@
   </custom>
 
   <visual>
-    <headlight diffuse="0.6 0.6 0.6" ambient="0.3 0.3 0.3" specular="0 0 0"/>
+    <headlight diffuse="0.6 0.6 0.6" ambient="0.1 0.1 0.1" specular="0 0 0"/>
     <rgba haze="0.15 0.25 0.35 1"/>
-    <global azimuth="120" elevation="-20" offwidth="640" offheight="480"/>
-    <scale contactwidth="0.075" contactheight="0.025" forcewidth="0.05" com="0.05" framewidth="0.01" framelength="0.2"/>
+    <global azimuth="120" elevation="-20"/>
   </visual>
 
   <asset>
@@ -29,21 +28,20 @@
   </asset>
 
   <worldbody>
-    <light pos="0 0 1.5" dir="0 0 -1" directional="true"/>
+    <light pos="0 0 1.5" directional="true"/>
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="1"/>
     
     <!-- table -->
     <body name="table" pos="0.5 0 0">
-      <!-- <geom name="table_top" type="box" size="0.4 0.4 0.02" pos="0 0 0.35" material="table" contype="1"/>
-      <geom name="table_leg1" type="box" size="0.02 0.02 0.18" pos="0.35 0.35 0.18" material="table"/>
-      <geom name="table_leg2" type="box" size="0.02 0.02 0.18" pos="0.35 -0.35 0.18" material="table"/>
-      <geom name="table_leg3" type="box" size="0.02 0.02 0.18" pos="-0.35 0.35 0.18" material="table"/>
-      <geom name="table_leg4" type="box" size="0.02 0.02 0.18" pos="-0.35 -0.35 0.18" material="table"/> -->
-       <!-- Virtual boundary visualization -->
+      <!-- Virtual boundary visualization -->
       <geom name="bound_x_pos" type="box" size="0.01 0.35 0.02" pos="0.35 0 0" material="boundary" contype="0" conaffinity="0"/>
       <geom name="bound_x_neg" type="box" size="0.01 0.35 0.02" pos="-0.35 0 0" material="boundary" contype="0" conaffinity="0"/>
       <geom name="bound_y_pos" type="box" size="0.35 0.01 0.02" pos="0 0.35 0" material="boundary" contype="0" conaffinity="0"/>
       <geom name="bound_y_neg" type="box" size="0.35 0.01 0.02" pos="0 -0.35 0" material="boundary" contype="0" conaffinity="0"/>
+    </body>
+    
+    <body name="goal" mocap="true" pos="0.7 0.0 0.03" quat="1 0 0 0">
+      <geom type="box" size="0.03 0.03 0.03" contype="0" conaffinity="0" rgba="0 1 0 0.3" />
     </body>
 
     <!-- pushable box -->
@@ -54,20 +52,18 @@
         mass="0.15"/>
       <site name="box_site" pos="0 0 0" size="0.005"/>
     </body>
-
-    <!-- Replace static goal site with mocap body -->
-    <body name="goal" mocap="true" pos="0.7 0.0 0.03" quat="1 0 0 0">
-      <geom type="box" size="0.03 0.03 0.03" contype="0" conaffinity="0" rgba="0 1 0 0.3" />
-    </body>
   </worldbody>
 
-  <!-- Sensors for the box -->
+  <!-- Sensors for the box and gripper -->
   <sensor>
-    <framepos name="box_position" objtype="body" objname="box" reftype="site" refname="reference" />
-    <framequat name="box_orientation" objtype="body" objname="box" reftype="site" refname="reference"/>
+    <framepos name="box_position" objtype="body" objname="box" />
+    <framequat name="box_orientation" objtype="body" objname="box"/>
   </sensor>
 
   <keyframe>
-    <key name="home" qpos="-0.196 -0.189 0.182 -2.1 0.0378 1.91 0.756 0 0 0.4 0 0 0 0 0 0" ctrl="0.5 0 0.5 -3.14  0 0"/>
+    <key name="home" qpos="0 0.26179939 3.14159265 -2.26892803 0 0.95993109 1.57079633 0 0 0 0 0 0 0"
+      ctrl="0 0 0 0 0 0"/>
+    <key name="retract" qpos="0 -0.34906585 3.14159265 -2.54818071 0 -0.87266463 1.57079633 0 0 0 0 0 0 0"
+      ctrl="0 0 0 0 0 0"/>
   </keyframe>
 </mujoco>
