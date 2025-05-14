@@ -1,9 +1,9 @@
 <mujoco model="panda scene">
-  <include file="mjx_panda_cartesian.xml"/>
+  <include file="mjx_panda_cartesian_no_contact.xml"/>
 
   <statistic center="0.3 0 0.4" extent="1"/>
 
-  <option timestep="0.005" iterations="5" ls_iterations="8" integrator="implicitfast">
+  <option timestep="0.01" iterations="1" ls_iterations="5" integrator="implicitfast">
     <flag eulerdamp="disable"/>
   </option>
 
@@ -33,7 +33,7 @@
     <geom name="floor" size="0 0 0.05" type="plane" material="groundplane" contype="1"/>
 
     <!-- Replace static goal site with mocap body -->
-    <body name="goal" mocap="true" pos="0.5 0.0 0.5" quat="0 -1 0 0">
+    <body name="goal" mocap="true" pos="0.5 0.0 0.4" quat="0 -1 0 0">
       <geom type="sphere" size=".02" contype="0" conaffinity="0" rgba="0 1 0 .5" />
     </body>
   </worldbody>

@@ -3,7 +3,7 @@
 
   <statistic center="0.3 0 0.4" extent="1"/>
 
-  <option timestep="0.005" iterations="5" ls_iterations="8" integrator="implicitfast">
+  <option timestep="0.01" iterations="4"  ls_iterations="10" integrator="implicitfast" impratio="0.1">
     <flag eulerdamp="disable"/>
   </option>
   <custom>
@@ -34,20 +34,20 @@
     
     <!-- table -->
     <body name="table" pos="0.5 0 0">
-      <geom name="table_top" type="box" size="0.4 0.4 0.02" pos="0 0 0.35" material="table" contype="1"/>
+      <!-- <geom name="table_top" type="box" size="0.4 0.4 0.02" pos="0 0 0.35" material="table" contype="1"/>
       <geom name="table_leg1" type="box" size="0.02 0.02 0.18" pos="0.35 0.35 0.18" material="table"/>
       <geom name="table_leg2" type="box" size="0.02 0.02 0.18" pos="0.35 -0.35 0.18" material="table"/>
       <geom name="table_leg3" type="box" size="0.02 0.02 0.18" pos="-0.35 0.35 0.18" material="table"/>
-      <geom name="table_leg4" type="box" size="0.02 0.02 0.18" pos="-0.35 -0.35 0.18" material="table"/>
+      <geom name="table_leg4" type="box" size="0.02 0.02 0.18" pos="-0.35 -0.35 0.18" material="table"/> -->
        <!-- Virtual boundary visualization -->
-      <geom name="bound_x_pos" type="box" size="0.01 0.35 0.02" pos="0.35 0 0.39" material="boundary" contype="0" conaffinity="0"/>
-      <geom name="bound_x_neg" type="box" size="0.01 0.35 0.02" pos="-0.35 0 0.39" material="boundary" contype="0" conaffinity="0"/>
-      <geom name="bound_y_pos" type="box" size="0.35 0.01 0.02" pos="0 0.35 0.39" material="boundary" contype="0" conaffinity="0"/>
-      <geom name="bound_y_neg" type="box" size="0.35 0.01 0.02" pos="0 -0.35 0.39" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_x_pos" type="box" size="0.01 0.35 0.02" pos="0.35 0 0" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_x_neg" type="box" size="0.01 0.35 0.02" pos="-0.35 0 0" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_y_pos" type="box" size="0.35 0.01 0.02" pos="0 0.35 0" material="boundary" contype="0" conaffinity="0"/>
+      <geom name="bound_y_neg" type="box" size="0.35 0.01 0.02" pos="0 -0.35 0" material="boundary" contype="0" conaffinity="0"/>
     </body>
 
     <!-- pushable box -->
-    <body name="box" pos="0.55 0 0.4">
+    <body name="box" pos="0.55 0 0.03">
       <joint type="free"/>
       <geom name="box_geom" type="box" size="0.03 0.03 0.03" material="box" condim="3"
         friction="0.6" contype="2" conaffinity="1" solref="0.02 1" priority="1"
@@ -56,7 +56,7 @@
     </body>
 
     <!-- Replace static goal site with mocap body -->
-    <body name="goal" mocap="true" pos="0.7 0.0 0.4" quat="1 0 0 0">
+    <body name="goal" mocap="true" pos="0.7 0.0 0.03" quat="1 0 0 0">
       <geom type="box" size="0.03 0.03 0.03" contype="0" conaffinity="0" rgba="0 1 0 0.3" />
     </body>
   </worldbody>
