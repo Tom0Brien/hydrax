@@ -10,11 +10,12 @@ from hydrax.task_base import Task
 
 
 @dataclass
-class CEMParams(SamplingParams):
-    """Policy parameters for the cross-entropy method.
+class DIALCEMParams(SamplingParams):
+    """Policy parameters for DIAL-style Cross-Entropy Method.
 
     Attributes:
         tk: The knot times of the control spline.
+        opt_iteration: The optimization iteration number.
         mean: The mean of the control spline knot distribution, μ = [u₀, ...].
         rng: The pseudo-random number generator key.
         cov: The (diagonal) covariance of the control distribution.
@@ -23,8 +24,8 @@ class CEMParams(SamplingParams):
     cov: jax.Array
 
 
-class CEM(SamplingBasedController):
-    """Cross-entropy method with diagonal covariance."""
+class DIALCEM(SamplingBasedController):
+    """DIAL-style Cross-entropy method with annealed covariance."""
 
     def __init__(
         self,
@@ -33,6 +34,8 @@ class CEM(SamplingBasedController):
         num_elites: int,
         sigma_start: float,
         sigma_min: float,
+        beta_opt_iter: float,
+        beta_horizon: float,
         num_randomizations: int = 1,
         explore_fraction: float = 0.0,
         risk_strategy: RiskStrategy = None,
@@ -50,6 +53,10 @@ class CEM(SamplingBasedController):
             num_elites: The number of elite samples to keep at each iteration.
             sigma_start: The initial standard deviation for the controls.
             sigma_min: The minimum standard deviation for the controls.
+            beta_opt_iter: The temperature parameter β₁ used in the noise schedule
+                          for annealing the control sequence.
+            beta_horizon: The temperature parameter β₂ used in the noise schedule
+                              for annealing the planning horizon.
             explore_fraction: Fraction of samples to keep at sigma_start.
             num_randomizations: The number of domain randomizations to use.
             risk_strategy: How to combining costs from different randomizations.
@@ -79,16 +86,18 @@ class CEM(SamplingBasedController):
         self.num_samples = num_samples
         self.sigma_min = sigma_min
         self.sigma_start = sigma_start
+        self.beta_opt_iter = beta_opt_iter
+        self.beta_horizon = beta_horizon
         self.num_elites = num_elites
         self.num_explore = int(self.num_samples * explore_fraction)
 
     def init_params(
         self, initial_knots: jax.Array = None, seed: int = 0
-    ) -> CEMParams:
+    ) -> DIALCEMParams:
         """Initialize the policy parameters."""
         _params = super().init_params(initial_knots, seed)
         cov = jnp.full_like(_params.mean, self.sigma_start)
-        return CEMParams(
+        return DIALCEMParams(
             tk=_params.tk,
             opt_iteration=0,
             mean=_params.mean,
@@ -96,9 +105,23 @@ class CEM(SamplingBasedController):
             rng=_params.rng,
         )
 
-    def sample_knots(self, params: CEMParams) -> Tuple[jax.Array, CEMParams]:
-        """Sample a control sequence."""
+    def sample_knots(
+        self, params: DIALCEMParams
+    ) -> Tuple[jax.Array, DIALCEMParams]:
+        """Sample a control sequence with annealed covariance."""
         rng, sample_rng, explore_rng = jax.random.split(params.rng, 3)
+
+        # Compute annealed covariance similar to DIAL's noise schedule
+        annealing_factor = jnp.exp(
+            -(params.opt_iteration) / (self.beta_opt_iter * self.iterations)
+            - (self.num_knots - 1 - jnp.arange(self.num_knots))
+            / (self.beta_horizon * self.num_knots)
+        )
+
+        # Apply annealing to the base covariance, but respect minimum
+        annealed_cov = jnp.maximum(
+            params.cov * annealing_factor[None, :, None], self.sigma_min
+        )
 
         # Pre-compute shapes for both main and exploration samples
         main_shape = (
@@ -112,14 +135,15 @@ class CEM(SamplingBasedController):
             self.task.model.nu,
         )
 
-        # Sample main knots with current covariance
+        # Sample main knots with annealed covariance
         main_controls = (
-            params.mean + params.cov * jax.random.normal(sample_rng, main_shape)
+            params.mean
+            + annealed_cov * jax.random.normal(sample_rng, main_shape)
             if main_shape[0] > 0
             else jnp.empty(main_shape)
         )
 
-        # Sample exploration knots with initial covariance
+        # Sample exploration knots with initial covariance (no annealing)
         explore_controls = (
             params.mean
             + self.sigma_start * jax.random.normal(explore_rng, explore_shape)
@@ -132,9 +156,9 @@ class CEM(SamplingBasedController):
         return controls, params.replace(rng=rng)
 
     def update_params(
-        self, params: CEMParams, rollouts: Trajectory
-    ) -> CEMParams:
-        """Update the mean with an exponentially weighted average."""
+        self, params: DIALCEMParams, rollouts: Trajectory
+    ) -> DIALCEMParams:
+        """Update the mean and base covariance based on elite samples."""
         costs = jnp.sum(rollouts.costs, axis=1)  # sum over time steps
 
         # Sort the costs and get the indices of the elites.
@@ -143,6 +167,7 @@ class CEM(SamplingBasedController):
 
         # The new proposal distribution is a Gaussian fit to the elites.
         mean = jnp.mean(rollouts.knots[elites], axis=0)
+        # Update base covariance
         cov = jnp.maximum(
             jnp.std(rollouts.knots[elites], axis=0), self.sigma_min
         )
