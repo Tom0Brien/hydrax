@@ -4,23 +4,24 @@ import evosax
 import mujoco
 import jax.numpy as jnp
 
-from hydrax.algs import MPPI, CEM, Evosax, PredictiveSampling
+from hydrax.algs import MPPI, CEM, CCEM, Evosax, PredictiveSampling
 from hydrax.risk import WorstCase
 from hydrax.simulation.deterministic import run_interactive
-from hydrax.tasks.franka_reach import FrankaReach
+from hydrax.tasks.kinova_teleop_push import KinovaTeleopPush
 
 """
-Run an interactive simulation of the franka reach task.
+Run an interactive simulation of the Kinova teleoperation push task.
 
 Double click on the green target, then drag it around with [ctrl + right-click].
+The Kinova arm will follow your commands while ensuring the box stays on the table.
 """
 
 # Define the task (cost and dynamics)
-task = FrankaReach()
+task = KinovaTeleopPush()
 
 # Parse command-line arguments
 parser = argparse.ArgumentParser(
-    description="Run an interactive simulation of the particle tracking task."
+    description="Run an interactive simulation of the Kinova teleoperation push task."
 )
 subparsers = parser.add_subparsers(
     dest="algorithm", help="Sampling algorithm (choose one)"
@@ -28,6 +29,7 @@ subparsers = parser.add_subparsers(
 subparsers.add_parser("ps", help="Predictive Sampling")
 subparsers.add_parser("mppi", help="Model Predictive Path Integral Control")
 subparsers.add_parser("cem", help="Cross-Entropy Method")
+subparsers.add_parser("ccem", help="Constrained Cross-Entropy Method")
 subparsers.add_parser("cmaes", help="CMA-ES")
 subparsers.add_parser(
     "samr", help="Genetic Algorithm with Self-Adaptation Mutation Rate (SAMR)"
@@ -67,11 +69,25 @@ elif args.algorithm == "cem":
     print("Running CEM")
     ctrl = CEM(
         task,
-        num_samples=2000,
+        num_samples=512,
         sigma_start=0.1,
-        sigma_min=0.1,
+        sigma_min=0.001,
         num_elites=20,
-        plan_horizon=0.5,
+        plan_horizon=0.25,
+        explore_fraction=0.5,
+        spline_type="zero",
+        num_knots=6,
+    )
+elif args.algorithm == "ccem":
+    print("Running CCEM")
+    ctrl = CCEM(
+        task,
+        num_samples=512,
+        sigma_start=0.1,
+        sigma_min=0.001,
+        num_elites=20,
+        plan_horizon=0.25,
+        explore_fraction=0.5,
         spline_type="zero",
         num_knots=6,
     )
@@ -141,28 +157,35 @@ else:
 # Define the model used for simulation
 mj_model = task.mj_model
 mj_data = mujoco.MjData(mj_model)
-mj_data.qpos[:9] = [
-    -0.196,
-    -0.189,
-    0.182,
-    -2.1,
-    0.0378,
-    1.91,
-    0.756,
+
+# Set initial joint positions for the Kinova Gen3 robot using the home position
+mj_data.qpos = [
+    -0.00877,
+    0.368,
+    3.15,
+    -1.45,
+    -0.00451,
+    -1.33,
+    1.58,
+    0.5,
+    0,
+    0.03,
+    0,
+    0,
     0,
     0,
 ]
 
-# Initial conditions for controller
+# Initial conditions for controller - Cartesian position, orientation
 initial_knots = jnp.tile(
     jnp.array(
         [
-            0.5,
-            0.0,
-            0.4,
-            -3.14,
-            0.0,
-            0.0,
+            0.45666519,  # x
+            0.0013501,  # y
+            0.43372431,  # z
+            0,  # rx
+            0,  # ry
+            1.571,  # rz
         ]
     ),
     (ctrl.num_knots, 1),
@@ -177,4 +200,5 @@ run_interactive(
     show_traces=False,
     max_traces=5,
     initial_knots=initial_knots,
+    record_video=True,
 )
