@@ -91,17 +91,17 @@ class CEMIdentifier:
     def init_params(self, initial_params: IDParams) -> None:
         self._params = initial_params
 
-    # ---------------------------------------------------------
-    #  Core update (JIT‑able)
-    # ---------------------------------------------------------
-    def update(self, params: IDParams) -> Tuple[Array, IDParams]:
+    def get_buffer_data(self) -> Tuple[Array, Array]:
+        """Extract current buffer data as JAX arrays."""
         if not self.ready():
-            raise RuntimeError("Buffer under‑filled; cannot update yet.")
-
-        # Assemble transitions
+            raise RuntimeError("Buffer under‑filled; cannot get buffer data.")
+        
         x_stack = jnp.stack(tuple(self._buf_x))  # (B+1, nx)
         u_stack = jnp.stack(tuple(self._buf_u))  # (B+1, nu)
-
+        return x_stack, u_stack
+    
+    def update(self, params: IDParams, x_stack: Array, u_stack: Array) -> IDParams:
+        """JIT-compilable update function that takes buffer data as input."""
         x_in, x_tgt = x_stack[:-1], x_stack[1:]
         u_in = u_stack[:-1]
         qpos_in, qvel_in = jnp.split(x_in, [self._nq], axis=1)

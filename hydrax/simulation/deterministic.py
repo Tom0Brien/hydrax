@@ -98,9 +98,9 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     jit_interp_func = jax.jit(controller.interp_func)
 
     # JIT the identifier update if provided
-    jit_identifier_update = None
+    identifier_update = None
     if identifier is not None:
-        jit_identifier_update = jax.jit(identifier.update)
+        identifier_update = jax.jit(identifier.update)
         print("System identification enabled")
 
     # Warm-up the controller
@@ -192,7 +192,9 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             # Add observation to identifier if provided
             if identifier is not None and identifier.ready():
                 id_start = time.time()
-                model_params = jit_identifier_update(model_params)
+                # Get fresh buffer data and pass it to JIT function
+                x_stack, u_stack = identifier.get_buffer_data()
+                model_params = identifier_update(model_params, x_stack, u_stack)
                 id_time = time.time() - id_start
                 # Update controller internal model
                 mjx_model = mjx_model.tree_replace(
