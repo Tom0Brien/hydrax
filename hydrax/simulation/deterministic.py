@@ -12,7 +12,7 @@ from mujoco import mjx
 from hydrax.alg_base import SamplingBasedController
 from hydrax import ROOT
 from hydrax.utils.video import VideoRecorder
-from hydrax.cem_identifier import CEMIdentifier
+from hydrax.identifier_base import SamplingBasedIdentifier
 
 """
 Tools for deterministic (synchronous) simulation, with the simulator and
@@ -34,7 +34,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     reference: np.ndarray = None,
     reference_fps: float = 30.0,
     record_video: bool = False,
-    identifier: CEMIdentifier = None,
+    identifier: SamplingBasedIdentifier = None,
 ) -> None:
     """Run an interactive simulation with the MPC controller.
 
@@ -62,7 +62,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         reference: The reference trajectory (qs) to visualize.
         reference_fps: The frame rate of the reference trajectory.
         record_video: Whether to record a video of the simulation.
-        identifier: Optional CEMIdentifier for system identification during simulation.
+        identifier: Optional SamplingBasedIdentifier for system identification during simulation.
     """
     # Report the planning horizon in seconds for debugging
     print(
@@ -86,7 +86,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     mjx_model = mjx.put_model(mj_model)
     if identifier is not None:
         id_time = 0.0
-        model_params = identifier.params()
+        model_params = identifier.get_params()
     else:
         model_params = None
     mjx_data = mjx.put_data(mj_model, mj_data)
@@ -98,7 +98,6 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     jit_interp_func = jax.jit(controller.interp_func)
 
     # JIT the identifier update if provided
-    identifier_update = None
     if identifier is not None:
         identifier_update = jax.jit(identifier.update)
         print("System identification enabled")
@@ -194,7 +193,9 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 id_start = time.time()
                 # Get fresh buffer data and pass it to JIT function
                 x_stack, u_stack = identifier.get_buffer_data()
-                model_params = identifier_update(model_params, x_stack, u_stack)
+                updated_params = identifier_update(identifier.get_params(), x_stack, u_stack)
+                identifier.set_params(updated_params)
+                model_params = identifier.get_params()
                 id_time = time.time() - id_start
                 # Update controller internal model
                 mjx_model = mjx_model.tree_replace(

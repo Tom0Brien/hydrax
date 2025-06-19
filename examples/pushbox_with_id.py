@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from hydrax.algs import MPPI, CEM, PredictiveSampling
 from hydrax.simulation.deterministic import run_interactive
 from hydrax.tasks.pushbox import PushBox
-from hydrax.cem_identifier import CEMIdentifier, IDParams
+from hydrax.identifiers import CEMIdentifier, CEMIdentifierParams
 from jax import random
 
 """
@@ -75,17 +75,17 @@ else:  # Default to CEM
         num_knots=11,
     )
 
-# Create the system identifier using the base class method
+# Create the system identifier using the new generalized structure
 sigma_start = 0.2
 identifier = CEMIdentifier(
     model_template=mjx.put_model(task.mj_model),
     apply_params_fn=task.apply_params_fn,
     param_dim=task.get_param_dim(),
-    buffer_size=64,
+    buffer_size=128,
     num_samples=128,
     num_elites=16,
     sigma_start=sigma_start,
-    sigma_min=0.1,
+    sigma_min=0.01,
     explore_fraction=0.5,
     seed=0,
 )
@@ -93,12 +93,13 @@ identifier = CEMIdentifier(
 # Initialize the identifier with a known initial parameter vector
 # For PushBox: [box_mass, box_sliding_friction]
 initial_params = jnp.array([0.15, 0.6])
-initial_id_params = IDParams(
+initial_id_params = CEMIdentifierParams(
     mean=initial_params,
     cov=sigma_start * jnp.ones((2,)),
     rng=random.PRNGKey(0),
+    iteration=0,
 )
-identifier.init_params(initial_id_params)
+identifier.set_params(initial_id_params)
 
 # Define the model used for simulation and perturb it
 mj_model = task.mj_model

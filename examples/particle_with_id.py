@@ -5,7 +5,7 @@ import jax.numpy as jnp
 from hydrax.algs import MPPI, CEM, PredictiveSampling
 from hydrax.simulation.deterministic import run_interactive
 from hydrax.tasks.particle import Particle
-from hydrax.cem_identifier import CEMIdentifier, IDParams
+from hydrax.identifiers import CEMIdentifier, CEMIdentifierParams
 from jax import random
 
 """
@@ -73,10 +73,11 @@ else:  # Default to CEM
         plan_horizon=0.25,
         spline_type="zero",
         num_knots=11,
+        num_randomizations=16,
     )
 
 
-# Create the system identifier using the base class method
+# Create the system identifier using the new generalized structure
 sigma_start = 0.2
 identifier = CEMIdentifier(
     model_template=mjx.put_model(task.mj_model),
@@ -93,18 +94,19 @@ identifier = CEMIdentifier(
 
 # Initialize the identifier with a known initial parameter vector
 initial_gain = jnp.array([1.0, 1.0])
-initial_id_params = IDParams(
+initial_id_params = CEMIdentifierParams(
     mean=initial_gain,
     cov=sigma_start * jnp.ones((2,)),
     rng=random.PRNGKey(0),
+    iteration=0,
 )
-identifier.init_params(initial_id_params)
+identifier.set_params(initial_id_params)
 
 # Define the model used for simulation and perturb it
 mj_model = task.mj_model
 # Intentionally perturb the actuator gains to test identification
 for i in range(mj_model.nu):
-    mj_model.actuator_gainprm[i, 0] *= 1.25  # Increase gains
+    mj_model.actuator_gainprm[i, 0] *= 1.75  # Increase gains
 
 # Initialize data with default state
 mj_data = mujoco.MjData(mj_model)
