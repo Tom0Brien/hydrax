@@ -19,6 +19,174 @@ controller running one after the other in the same thread.
 """
 
 
+def run_evaluation(
+    controller: SamplingBasedController,
+    mj_model: mujoco.MjModel,
+    mj_data: mujoco.MjData,
+    frequency: float,
+    duration: float,
+    initial_knots: jax.Array = None,
+    verbose: bool = True,
+) -> dict:
+    """Run a fixed-duration simulation and evaluate cumulative cost.
+    
+    This function runs a deterministic simulation for a specified duration
+    and tracks the cumulative cost throughout the episode.
+    
+    Args:
+        controller: The controller instance, which includes the task definition.
+        mj_model: The MuJoCo model for the system to use for simulation.
+        mj_data: A MuJoCo data object containing the initial system state.
+        frequency: The control frequency (Hz) for replanning.
+        duration: Total simulation time in seconds.
+        initial_knots: The initial knot points for the control spline.
+        verbose: Whether to print progress information.
+        
+    Returns:
+        dict: Results containing cumulative cost, plan times, and other metrics.
+    """
+    if verbose:
+        print(
+            f"Running evaluation for {duration}s with {controller.ctrl_steps} steps "
+            f"over a {controller.plan_horizon}s horizon with {controller.num_knots} knots."
+        )
+
+    # Calculate simulation parameters
+    replan_period = 1.0 / frequency
+    sim_steps_per_replan = int(replan_period / mj_model.opt.timestep)
+    sim_steps_per_replan = max(sim_steps_per_replan, 1)
+    step_dt = sim_steps_per_replan * mj_model.opt.timestep
+    actual_frequency = 1.0 / step_dt
+    total_steps = int(duration / step_dt)
+    
+    if verbose:
+        print(f"Planning at {actual_frequency:.2f} Hz, simulating at {1.0 / mj_model.opt.timestep:.0f} Hz")
+        print(f"Total planning steps: {total_steps}")
+
+    # Initialize the controller
+    mjx_data = mjx.put_data(mj_model, mj_data)
+    mjx_data = mjx_data.replace(
+        mocap_pos=mj_data.mocap_pos, mocap_quat=mj_data.mocap_quat
+    )
+    policy_params = controller.init_params(initial_knots=initial_knots)
+    jit_optimize = jax.jit(controller.optimize)
+    jit_interp_func = jax.jit(controller.interp_func)
+
+    # Warm-up the controller
+    if verbose:
+        print("Warming up controller...")
+    start_warmup = time.time()
+    policy_params, rollouts = jit_optimize(mjx_data, policy_params)
+    policy_params, rollouts = jit_optimize(mjx_data, policy_params)
+    
+    tq = jnp.arange(0, sim_steps_per_replan) * mj_model.opt.timestep
+    tk = policy_params.tk
+    knots = policy_params.mean[None, ...]
+    _ = jit_interp_func(tq, tk, knots)
+    _ = jit_interp_func(tq, tk, knots)
+    warmup_time = time.time() - start_warmup
+    if verbose:
+        print(f"Warmup time: {warmup_time:.3f}s")
+
+    # Initialize tracking variables
+    cumulative_cost = 0.0
+    plan_times = []
+    step_costs = []
+    
+    # Make a copy of initial state for cost computation
+    initial_mjx_data = mjx_data
+    
+    # Run the evaluation
+    start_time = time.time()
+    
+    for step in range(total_steps):
+        # Update MJX data with current MuJoCo state
+        mjx_data = mjx_data.replace(
+            qpos=jnp.array(mj_data.qpos),
+            qvel=jnp.array(mj_data.qvel),
+            mocap_pos=jnp.array(mj_data.mocap_pos),
+            mocap_quat=jnp.array(mj_data.mocap_quat),
+            time=mj_data.time,
+        )
+
+        # Do a replanning step
+        plan_start = time.time()
+        policy_params, rollouts = jit_optimize(mjx_data, policy_params)
+        plan_time = time.time() - plan_start
+        plan_times.append(plan_time)
+
+        # Query the control spline at simulation frequency
+        sim_dt = mj_model.opt.timestep
+        t_curr = mj_data.time
+        
+        tq = jnp.arange(0, sim_steps_per_replan) * sim_dt + t_curr
+        tk = policy_params.tk
+        knots = policy_params.mean[None, ...]
+        us = np.asarray(jit_interp_func(tq, tk, knots))[0]
+
+        # Simulate the system and accumulate costs
+        step_cost = 0.0
+        for i in range(sim_steps_per_replan):
+            # Apply control
+            mj_data.ctrl[:] = np.array(us[i])
+            
+            # Compute running cost before stepping
+            mjx_step_data = mjx.put_data(mj_model, mj_data)
+            running_cost = float(controller.task.running_cost(
+                mjx_step_data, jnp.array(us[i])
+            ))
+            step_cost += running_cost * sim_dt
+            
+            # Step the simulation
+            mujoco.mj_step(mj_model, mj_data)
+        
+        cumulative_cost += step_cost
+        step_costs.append(step_cost)
+        
+        # Print progress
+        if verbose and (step + 1) % max(1, total_steps // 10) == 0:
+            progress = (step + 1) / total_steps * 100
+            avg_plan_time = np.mean(plan_times[-10:])  # Average of last 10
+            print(f"Progress: {progress:.0f}%, Avg plan time: {avg_plan_time:.4f}s, "
+                  f"Cumulative cost: {cumulative_cost:.2f}")
+
+    # Add terminal cost
+    final_mjx_data = mjx.put_data(mj_model, mj_data)
+    terminal_cost = float(controller.task.terminal_cost(final_mjx_data))
+    cumulative_cost += terminal_cost
+    
+    total_time = time.time() - start_time
+    
+    # Compile results
+    results = {
+        'cumulative_cost': cumulative_cost,
+        'terminal_cost': terminal_cost,
+        'mean_plan_time': np.mean(plan_times),
+        'std_plan_time': np.std(plan_times),
+        'max_plan_time': np.max(plan_times),
+        'total_duration': total_time,
+        'actual_frequency': actual_frequency,
+        'total_planning_steps': total_steps,
+        'plan_times': plan_times,
+        'step_costs': step_costs,
+        'warmup_time': warmup_time,
+    }
+    
+    if verbose:
+        print(f"\n{'='*50}")
+        print("EVALUATION RESULTS")
+        print(f"{'='*50}")
+        print(f"Total simulation time: {total_time:.2f}s")
+        print(f"Cumulative cost: {cumulative_cost:.2f}")
+        print(f"Terminal cost: {terminal_cost:.2f}")
+        print(f"Mean plan time: {results['mean_plan_time']:.4f}s ± {results['std_plan_time']:.4f}s")
+        print(f"Max plan time: {results['max_plan_time']:.4f}s")
+        print(f"Planning frequency: {actual_frequency:.2f} Hz")
+        print(f"Total planning steps: {total_steps}")
+    
+    return results
+
+
 def run_interactive(  # noqa: PLR0912, PLR0915
     controller: SamplingBasedController,
     mj_model: mujoco.MjModel,

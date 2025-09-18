@@ -56,7 +56,7 @@
     </body>
 
     <!-- Replace static goal site with mocap body -->
-    <body name="goal" mocap="true" pos="0.7 0.0 0.03" quat="1 0 0 0">
+    <body name="goal" mocap="true" pos="0.8 0.0 0.03" quat="1 0 0 0">
       <geom type="box" size="0.03 0.03 0.03" contype="0" conaffinity="0" rgba="0 1 0 0.3" />
     </body>
   </worldbody>
