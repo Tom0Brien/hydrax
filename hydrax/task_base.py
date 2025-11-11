@@ -134,3 +134,18 @@ class Task(ABC):
             A dictionary of randomized data elements.
         """
         return {}
+
+    def step(self, model: mjx.Model, state: mjx.Data) -> mjx.Data:
+        """Custom step function to advance the state.
+
+        By default, this uses the standard MuJoCo MJX step function. Override
+        this method to use a custom dynamics model (e.g., a neural network).
+
+        Args:
+            model: The MuJoCo MJX model (may be unused if using custom dynamics).
+            state: The current state xₜ.
+
+        Returns:
+            The next state xₜ₊₁ after applying the dynamics.
+        """
+        return mjx.step(model, state)
