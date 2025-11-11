@@ -6,23 +6,16 @@ from mujoco import mjx
 
 from hydrax.algs.predictive_sampling import PredictiveSampling
 from hydrax.tasks.pendulum import Pendulum
-from hydrax.task_base import Task
 
 
 class PendulumWithCustomStep(Pendulum):
-    """Pendulum task with a custom step function that tracks calls."""
-
-    def __init__(self) -> None:
-        """Initialize the task and step call counter."""
-        super().__init__()
-        # Use a counter to track step calls (using a mutable object)
-        self._step_call_count = 0
+    """Pendulum task with a custom step function."""
 
     def step(self, model: mjx.Model, state: mjx.Data) -> mjx.Data:
-        """Custom step function that increments a counter."""
-        # For this test, we'll just use the default step but track calls
-        # In a real neural network case, this would use the NN to predict next state
-        self._step_call_count += 1
+        """Custom step function."""
+        # For this test, we'll just use the default step
+        # In a real neural network case, this would use the NN to
+        # predict next state
         return mjx.step(model, state)
 
 
@@ -49,37 +42,27 @@ def test_custom_step_function() -> None:
     state = mjx.make_data(task.model)
     params = opt.init_params()
     
-    # Sample control sequences
+    # Sample control sequences from the policy
     knots, params = opt.sample_knots(params)
     
-    # Reset counter
-    task._step_call_count = 0
+    # Compute the control sequence from the knots
+    tk = jnp.linspace(0.0, opt.plan_horizon, opt.num_knots)
+    tq = jnp.linspace(0.0, opt.plan_horizon - opt.dt, opt.ctrl_steps)
+    controls = opt.interp_func(tq, tk, knots)
     
     # Roll out the control sequences - this should call step() multiple times
-    _, rollouts = opt.eval_rollouts(task.model, state, knots, knots)
+    _, rollouts = opt.eval_rollouts(task.model, state, controls, knots)
     
-    # Verify that step was called (should be called ctrl_steps times per rollout)
-    # Note: The counter won't work with JAX JIT, but we can verify the method exists
-    # and the rollout completes successfully
+    # Verify the rollout completes successfully
     assert rollouts.costs.shape[0] == opt.num_samples
     assert rollouts.costs.shape[1] == opt.ctrl_steps + 1
 
 
 def test_custom_step_vs_default() -> None:
-    """Test that custom step can produce different results than default."""
+    """Test that both default and custom step functions work correctly."""
     # Create two tasks: one with default step, one with custom step
     task_default = Pendulum()
-    
-    # Custom step that adds a small perturbation (for testing purposes)
-    class PendulumWithPerturbedStep(Pendulum):
-        def step(self, model: mjx.Model, state: mjx.Data) -> mjx.Data:
-            # Add a tiny perturbation to verify custom step is used
-            next_state = mjx.step(model, state)
-            # Add a very small perturbation to qpos
-            perturbed_qpos = next_state.qpos + 1e-6
-            return next_state.replace(qpos=perturbed_qpos)
-    
-    task_custom = PendulumWithPerturbedStep()
+    task_custom = PendulumWithCustomStep()
     
     # Create controllers
     opt_default = PredictiveSampling(
@@ -103,7 +86,8 @@ def test_custom_step_vs_default() -> None:
     )
     
     # Initialize state and parameters
-    state = mjx.make_data(task_default.model)
+    state_default = mjx.make_data(task_default.model)
+    state_custom = mjx.make_data(task_custom.model)
     params_default = opt_default.init_params()
     params_custom = opt_custom.init_params()
     
@@ -111,27 +95,38 @@ def test_custom_step_vs_default() -> None:
     knots_default, params_default = opt_default.sample_knots(params_default)
     knots_custom, params_custom = opt_custom.sample_knots(params_custom)
     
-    # Use the same control sequence for both
-    knots = knots_default
+    # Compute control sequences from knots
+    tk_default = jnp.linspace(
+        0.0, opt_default.plan_horizon, opt_default.num_knots
+    )
+    tq_default = jnp.linspace(
+        0.0, opt_default.plan_horizon - opt_default.dt, opt_default.ctrl_steps
+    )
+    controls_default = opt_default.interp_func(
+        tq_default, tk_default, knots_default
+    )
+    
+    tk_custom = jnp.linspace(0.0, opt_custom.plan_horizon, opt_custom.num_knots)
+    tq_custom = jnp.linspace(
+        0.0, opt_custom.plan_horizon - opt_custom.dt, opt_custom.ctrl_steps
+    )
+    controls_custom = opt_custom.interp_func(tq_custom, tk_custom, knots_custom)
     
     # Roll out with default step
     _, rollouts_default = opt_default.eval_rollouts(
-        task_default.model, state, knots, knots
+        task_default.model, state_default, controls_default, knots_default
     )
     
     # Roll out with custom step
     _, rollouts_custom = opt_custom.eval_rollouts(
-        task_custom.model, state, knots, knots
+        task_custom.model, state_custom, controls_custom, knots_custom
     )
     
     # Verify both produce valid results
     assert rollouts_default.costs.shape == rollouts_custom.costs.shape
     assert rollouts_default.controls.shape == rollouts_custom.controls.shape
-    
-    # Note: The states are returned separately from eval_rollouts, not in the Trajectory
-    # For this test, we just verify that both rollouts complete successfully
-    # and that the custom step method is being used (which we verify by the fact
-    # that the code runs without errors)
+    assert rollouts_default.costs.shape[0] == opt_default.num_samples
+    assert rollouts_custom.costs.shape[0] == opt_custom.num_samples
 
 
 if __name__ == "__main__":
