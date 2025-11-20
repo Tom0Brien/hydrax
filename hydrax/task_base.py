@@ -37,6 +37,9 @@ class Task(ABC):
         self.mj_model = mj_model
         self.model = mjx.put_model(mj_model)
 
+        # Set the control dimension (default to model's nu)
+        self.nu = mj_model.nu
+
         # Set actuator limits
         self.u_min = jnp.where(
             mj_model.actuator_ctrllimited,
@@ -57,6 +60,18 @@ class Task(ABC):
         self.trace_site_ids = jnp.array(
             [mj_model.site(name).id for name in trace_sites]
         )
+
+    def apply_control(self, state: mjx.Data, control: jax.Array) -> mjx.Data:
+        """Apply the control action to the state.
+
+        Args:
+            state: The current state xₜ.
+            control: The control action uₜ.
+
+        Returns:
+            The state with the control action applied.
+        """
+        return state.replace(ctrl=control)
 
     @abstractmethod
     def running_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:

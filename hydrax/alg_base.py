@@ -248,7 +248,7 @@ class SamplingBasedController(ABC):
             x: mjx.Data, u: jax.Array
         ) -> Tuple[mjx.Data, Tuple[mjx.Data, jax.Array, jax.Array]]:
             """Compute the cost and observation, then advance the state."""
-            x = x.replace(ctrl=u)
+            x = self.task.apply_control(x, u)
             x = self.task.step(model, x)  # step model + compute site positions
             cost = self.dt * self.task.running_cost(x, u)
             sites = self.task.get_trace_sites(x)
@@ -286,9 +286,9 @@ class SamplingBasedController(ABC):
         mean = (
             initial_knots
             if initial_knots is not None
-            else jnp.zeros((self.num_knots, self.task.model.nu))
+            else jnp.zeros((self.num_knots, self.task.nu))
         )
-        assert mean.shape == (self.num_knots, self.task.model.nu), (
+        assert mean.shape == (self.num_knots, self.task.nu), (
             f"Initial knots must have shape (num_knots, nu), got {mean.shape}"
         )
         tk = jnp.linspace(0.0, self.plan_horizon, self.num_knots)

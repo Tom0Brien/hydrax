@@ -121,7 +121,7 @@ class DIAL(SamplingBasedController):
 
         noise = jax.random.normal(
             sample_rng,
-            (self.num_samples, self.num_knots, self.task.model.nu),
+            (self.num_samples, self.num_knots, self.task.nu),
         )
 
         noise_level = self.noise_level * jnp.exp(

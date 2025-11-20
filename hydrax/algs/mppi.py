@@ -92,7 +92,7 @@ class MPPI(SamplingBasedController):
             (
                 self.num_samples,
                 self.num_knots,
-                self.task.model.nu,
+                self.task.nu,
             ),
         )
         controls = params.mean + self.noise_level * noise
