@@ -55,6 +55,14 @@ class Task(ABC):
         # Simulation timestep
         self.dt = mj_model.opt.timestep
 
+        # Control timestep (how often to update control)
+        # Defaults to simulation timestep (control updated every step)
+        # Override to slower frequency (e.g., 0.02 for 50Hz) to hold control constant
+        self.ctrl_dt = mj_model.opt.timestep
+        
+        # Number of simulation steps per control update
+        self.n_substeps = max(1, round(self.ctrl_dt / self.dt))
+
         # Get site IDs for points we want to trace
         trace_sites = trace_sites or []
         self.trace_site_ids = jnp.array(
@@ -153,8 +161,9 @@ class Task(ABC):
     def step(self, model: mjx.Model, state: mjx.Data) -> mjx.Data:
         """Custom step function to advance the state.
 
-        By default, this uses the standard MuJoCo MJX step function. Override
-        this method to use a custom dynamics model (e.g., a neural network).
+        By default, this uses the standard MuJoCo MJX step function, repeated
+        n_substeps times with the same control. Override this method to use a
+        custom dynamics model (e.g., a neural network).
 
         Args:
             model: The MuJoCo MJX model (may be unused if using custom dynamics).
@@ -163,4 +172,9 @@ class Task(ABC):
         Returns:
             The next state xₜ₊₁ after applying the dynamics.
         """
-        return mjx.step(model, state)
+        # Perform n_substeps simulation steps with the same control
+        # This matches mujoco_playground's mjx_env.step behavior
+        def single_step(data, _):
+            return mjx.step(model, data), None
+        
+        return jax.lax.scan(single_step, state, None, self.n_substeps)[0]

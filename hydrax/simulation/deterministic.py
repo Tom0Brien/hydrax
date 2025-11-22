@@ -171,6 +171,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 qvel=jnp.array(mj_data.qvel),
                 mocap_pos=jnp.array(mj_data.mocap_pos),
                 mocap_quat=jnp.array(mj_data.mocap_quat),
+                ctrl=jnp.array(mj_data.ctrl),
                 time=mj_data.time,
             )
 
@@ -212,7 +213,6 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 )
 
             # query the control spline at the sim frequency
-            # (we assume the sim freq is the same as the low-level ctrl freq)
             sim_dt = mj_model.opt.timestep
             t_curr = mj_data.time
 
@@ -221,12 +221,27 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             knots = policy_params.mean[None, ...]
             us = np.asarray(jit_interp_func(tq, tk, knots))[0]  # (ss, nu)
 
+            # Use pre-computed n_substeps (avoids issues with traced values)
+            n_substeps = controller.task.n_substeps
+            
             # simulate the system between spline replanning steps
             for i in range(sim_steps_per_replan):
-                if hasattr(controller.task, "apply_control_numpy"):
-                    controller.task.apply_control_numpy(mj_data, np.array(us[i]))
-                else:
-                    mj_data.ctrl[:] = np.array(us[i])
+                # Sync state from mujoco to mjx before computing control
+                # This ensures apply_control sees the current state
+                mjx_data = mjx.put_data(mj_model, mj_data)
+                
+                # Update control: every step if n_substeps==1, or every n_substeps
+                if n_substeps == 1:
+                    # Standard case: update ctrl from spline every step
+                    mjx_data = controller.task.apply_control(mjx_data, jnp.array(us[i]))
+                    mj_data.ctrl[:] = np.array(mjx_data.ctrl)
+                elif i % n_substeps == 0:
+                    # Control updated less frequently: apply every n_substeps
+                    # Query control at the current time for this control period
+                    mjx_data = controller.task.apply_control(mjx_data, jnp.array(us[i]))
+                    mj_data.ctrl[:] = np.array(mjx_data.ctrl)
+                # else: ctrl was already set above and held constant
+                
                 mujoco.mj_step(mj_model, mj_data)
                 viewer.sync()
 

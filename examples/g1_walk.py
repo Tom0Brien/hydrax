@@ -18,10 +18,11 @@ def main():
     print("Initializing PredictiveSampling controller...")
     ctrl = PredictiveSampling(
         task=task,
-        num_samples=1, # Reduced for CPU verification
+        num_samples=1,  # Reduced for faster testing
         noise_level=0.2,
-        num_knots=1,
-        plan_horizon=0.5,
+        seed=0,
+        plan_horizon=0.1,
+        num_knots=3,
         iterations=1,
     )
     
@@ -33,6 +34,8 @@ def main():
     key_id = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_KEY, "knees_bent")
     if key_id != -1:
         mujoco.mj_resetDataKeyframe(mj_model, mj_data, key_id)
+        # Initialize ctrl to default pose so last_act at t=0 is zeros, not -2*default_pose
+        mj_data.ctrl[:] = task._default_pose
     else:
         print("Warning: 'knees_bent' keyframe not found, using default pose.")
         # Fallback: set joints if possible, but careful with shape

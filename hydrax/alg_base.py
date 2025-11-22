@@ -89,9 +89,10 @@ class SamplingBasedController(ABC):
         # time-related variables
         # NOTE: we always interpret self.task.model as the controller's
         # internal model, not the model used for simulation. dt is the
-        # time between spline queries.
+        # time between control updates (task.ctrl_dt), since task.step()
+        # internally performs n_substeps simulation steps.
         self.plan_horizon = plan_horizon
-        self.dt = self.task.dt
+        self.dt = self.task.ctrl_dt  # Control timestep (each step advances by this amount)
         self.ctrl_steps = int(round(self.plan_horizon / self.dt))
 
         # Spline setup for control interpolation
