@@ -3,6 +3,7 @@ from typing import Any
 
 import jax
 import jax.numpy as jnp
+import mujoco
 from brax.training.agents.ppo import networks as ppo_networks
 from brax.training.agents.ppo import train as ppo
 from etils import epath
@@ -175,11 +176,11 @@ class G1Locomotion(Task):
         # Environment applies: motor_targets = default_pose + action * scale
         motor_targets = self._default_pose + act * self._action_scale
         
-        # Clip motor targets to joint limits
+        # Clip motor targets to joint limits (only robot joints, not ball)
         motor_targets = jnp.clip(
             motor_targets,
-            self.mj_model.jnt_range[1:, 0],  # Skip freejoint
-            self.mj_model.jnt_range[1:, 1],
+            self.mj_model.jnt_range[1:30, 0],  # Robot joints only
+            self.mj_model.jnt_range[1:30, 1],
         )
         
         # Return state with updated control
@@ -190,34 +191,29 @@ class G1Locomotion(Task):
         state: mjx.Data,
         control: jax.Array
     ) -> jax.Array:
-        """Cost to reach a desired (x, y, theta) pose.
+        """Cost to reach goal pose (defined by mocap body).
         
-        The MPC will optimize velocity commands to minimize
-        distance to target.
+        Like pusht, the goal is set by moving the mocap body.
+        The MPC optimizes velocity commands to minimize distance.
         """
-        # Target pose (can be updated externally)
-        target_pos = getattr(
-            self, 'target_pos', jnp.array([2.0, 0.0])
-        )
-        target_theta = getattr(self, 'target_theta', 0.0)
+        # Get goal from mocap body (similar to pusht)
+        goal_pos = state.mocap_pos[0, :2]  # x, y from mocap
+        goal_quat = state.mocap_quat[0]  # quaternion from mocap
         
-        # Current pose
-        pos = state.qpos[:2]  # x, y position
+        # Current robot pose
+        robot_pos = state.qpos[:2]  # x, y position
+        robot_quat = state.qpos[3:7]  # [qw, qx, qy, qz]
         
-        # Extract yaw from quaternion
-        # [qw, qx, qy, qz] = state.qpos[3:7]
-        qw, qx, qy, qz = (
-            state.qpos[3], state.qpos[4],
-            state.qpos[5], state.qpos[6]
-        )
-        theta = jnp.arctan2(
-            2 * (qw * qz + qx * qy),
-            1 - 2 * (qy**2 + qz**2)
-        )
+        # Position error
+        pos_error = robot_pos - goal_pos
+        dist_cost = jnp.sum(pos_error**2)
         
-        # Cost components
-        dist_cost = jnp.sum((pos - target_pos)**2)
-        theta_cost = (theta - target_theta)**2
+        # Orientation error (quaternion difference)
+        quat_error = mjx._src.math.quat_sub(robot_quat, goal_quat)
+        # Only care about yaw (z-axis rotation)
+        theta_cost = quat_error[3]**2  # qz component
+        
+        # Control regularization
         ctrl_cost = jnp.sum(control**2) * 0.01
         
         return dist_cost + theta_cost + ctrl_cost
