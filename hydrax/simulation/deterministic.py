@@ -119,12 +119,15 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     if record_video:
         # Video dimensions
         width, height = 720, 480
+        # Video FPS should match simulation frequency (frames captured per sim step)
+        # not the control frequency
+        video_fps = 1.0 / mj_model.opt.timestep
         # Create the video recorder
         recorder = VideoRecorder(
             output_dir=os.path.join(ROOT, "recordings"),
             width=width,
             height=height,
-            fps=actual_frequency,
+            fps=video_fps,
         )
         # Ensure model visual offscreen buffer is compatible with video recording
         mj_model.vis.global_.offwidth = width
