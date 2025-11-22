@@ -21,7 +21,7 @@ def main():
         num_samples=16,  # Reduced for faster testing
         noise_level=0.5,
         seed=0,
-        plan_horizon=0.25,
+        plan_horizon=1,
         num_knots=5,
         iterations=1,
     )
