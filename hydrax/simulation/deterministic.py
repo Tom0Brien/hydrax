@@ -223,7 +223,10 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
             # simulate the system between spline replanning steps
             for i in range(sim_steps_per_replan):
-                mj_data.ctrl[:] = np.array(us[i])
+                if hasattr(controller.task, "apply_control_numpy"):
+                    controller.task.apply_control_numpy(mj_data, np.array(us[i]))
+                else:
+                    mj_data.ctrl[:] = np.array(us[i])
                 mujoco.mj_step(mj_model, mj_data)
                 viewer.sync()
 
