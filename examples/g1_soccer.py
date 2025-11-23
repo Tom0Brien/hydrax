@@ -45,21 +45,21 @@ def main() -> None:
     )
     if ball_id != -1:
         # Ball at x=1.5, y=0.5, z=0.117 (radius above ground)
-        mj_data.qpos[36:36+3] = [1.5, 0.5, 0.117]
+        mj_data.qpos[36:36+3] = [2, 0.5, 0.117]
         # Quaternion identity (no rotation)
         mj_data.qpos[36+3:36+7] = [1.0, 0.0, 0.0, 0.0]
-        print("Soccer ball positioned at: x=1.5, y=0.5, z=0.117")
+        print(f"Soccer ball positioned at: {mj_data.qpos[36:36+3]}")
     
     # Set goal position via mocap body
     # Goal: push ball to (3, 1)
     if len(mj_data.mocap_pos) > 0:
-        mj_data.mocap_pos[0] = [3.0, -1.0, 0.05]  # x, y, z (on ground)
+        mj_data.mocap_pos[0] = [4.75, 0.0, 0.05]  # x, y, z (on ground)
         # Quaternion for theta=0.0 (facing forward)
         mj_data.mocap_quat[0] = [1.0, 0.0, 0.0, 0.0]
-        print("Goal set to: x=3.0, y=1.0")
+        print(f"Goal set to: {mj_data.mocap_pos[0]}")
         print(
             "Task: Robot should push ball from "
-            "(1.5, 0.5) to goal at (3.0, 1.0)"
+            f"({mj_data.qpos[36:36+3]} to goal at {mj_data.mocap_pos[0]}"
         )
 
     # Run the interactive simulation
