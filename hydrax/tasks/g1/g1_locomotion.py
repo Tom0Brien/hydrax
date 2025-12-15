@@ -1,20 +1,19 @@
 import functools
+from pathlib import Path
 from typing import Any
 
 import jax
 import jax.numpy as jnp
 import mujoco
-from brax.training.agents.ppo import networks as ppo_networks
-from brax.training.agents.ppo import train as ppo
 from etils import epath
 from mujoco import mjx
 
 from hydrax.task_base import Task
 
 # Checkpoint path for trained G1 joystick policy
-CHECKPOINT_PATH = (
-    "/home/tom/OneDrive/Phd/Papers/GPC/mujoco_playground/logs/"
-    "G1JoystickFlatTerrain-20251120-162949/checkpoints/000202342400"
+CHECKPOINT_PATH = str(
+    Path(__file__).parent.parent.parent.parent.parent
+    / "mujoco_playground/logs/G1JoystickFlatTerrain-20251120-162949/checkpoints/000202342400"
 )
 ENV_NAME = "G1JoystickFlatTerrain"
 
@@ -74,6 +73,10 @@ class G1Locomotion(Task):
         Returns:
             Jitted inference function
         """
+        # Import brax here to avoid import errors when G1Locomotion isn't used
+        from brax.training.agents.ppo import networks as ppo_networks  # noqa: E402
+        from brax.training.agents.ppo import train as ppo  # noqa: E402
+        
         # Get PPO config
         ppo_params = locomotion_params.brax_ppo_config(ENV_NAME)
         ppo_params.num_timesteps = 0  # Just load, don't train
@@ -93,13 +96,39 @@ class G1Locomotion(Task):
             del training_params["network_factory"]
         
         checkpoint_path = epath.Path(CHECKPOINT_PATH).resolve()
+        # Check if this is already a specific checkpoint directory
+        # (has ppo_network_config.json) or if it's the parent checkpoints directory
+        if (checkpoint_path / "ppo_network_config.json").exists():
+            # This is already a specific checkpoint directory
+            restore_checkpoint_path = checkpoint_path
+        elif checkpoint_path.is_dir():
+            # This is the parent checkpoints directory, find latest numeric checkpoint
+            latest_ckpts = list(checkpoint_path.glob("*"))
+            latest_ckpts = [ckpt for ckpt in latest_ckpts if ckpt.is_dir()]
+            # Only keep directories with numeric names
+            numeric_ckpts = []
+            for ckpt in latest_ckpts:
+                try:
+                    int(ckpt.name)
+                    numeric_ckpts.append(ckpt)
+                except ValueError:
+                    continue
+            if not numeric_ckpts:
+                raise ValueError(
+                    f"No numeric checkpoint directories found in {checkpoint_path}"
+                )
+            numeric_ckpts.sort(key=lambda x: int(x.name))
+            latest_ckpt = numeric_ckpts[-1]
+            restore_checkpoint_path = latest_ckpt
+        else:
+            restore_checkpoint_path = checkpoint_path
         
         train_fn = functools.partial(
             ppo.train,
             **training_params,
             network_factory=network_factory,
             seed=42,
-            restore_checkpoint_path=checkpoint_path,
+            restore_checkpoint_path=str(restore_checkpoint_path),
             wrap_env_fn=wrapper.wrap_for_brax_training,
         )
         

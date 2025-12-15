@@ -6,6 +6,7 @@ from mujoco import mjx
 
 from hydrax.tasks.g1.g1_locomotion import G1Locomotion
 from hydrax.algs.predictive_sampling import PredictiveSampling
+from hydrax.algs.cem import CEM
 from hydrax.risk import AverageCost
 from hydrax.simulation.deterministic import run_interactive
 
@@ -16,14 +17,16 @@ def main():
     
     # Initialize controller
     print("Initializing PredictiveSampling controller...")
-    ctrl = PredictiveSampling(
+    ctrl = CEM(
         task=task,
-        num_samples=16,  # Reduced for faster testing
-        noise_level=0.5,
-        seed=0,
+        num_samples=32,
+        num_elites=8,
+        sigma_start=0.5,
+        sigma_min=0.05,
+        explore_fraction=0.5,
         plan_horizon=1,
-        num_knots=5,
-        iterations=1,
+        spline_type="zero",
+        num_knots=4,
     )
     
     # Define the model used for simulation
