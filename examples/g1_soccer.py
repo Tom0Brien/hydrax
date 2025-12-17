@@ -1,6 +1,8 @@
 import mujoco
 
-from hydrax.algs import CEM
+from evosax.algorithms.distribution_based import CMA_ES
+
+from hydrax.algs import CEM, Evosax
 from hydrax.simulation.deterministic import run_interactive
 from hydrax.tasks.g1.g1_soccer import G1Soccer
 
@@ -12,18 +14,27 @@ def main() -> None:
     task = G1Soccer()
     
     # Initialize controller
-    print("Initializing controller...")
+    # print("Initializing controller...")
     ctrl = CEM(
         task=task,
-        num_samples=16,
-        num_elites=4,
+        num_samples=32,
+        num_elites=8,
         sigma_start=0.5,
         sigma_min=0.05,
         explore_fraction=0.5,
-        plan_horizon=0.75,
+        plan_horizon=1,
         spline_type="zero",
         num_knots=4,
     )
+    # print("Initializing Evosax controller...")
+    # ctrl = Evosax(
+    #     task,
+    #     CMA_ES,
+    #     num_samples=32,
+    #     plan_horizon=0.75,
+    #     spline_type="zero",
+    #     num_knots=6,
+    # )
     
     # Define the model used for simulation
     mj_model = task.mj_model

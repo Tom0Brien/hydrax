@@ -4,28 +4,35 @@ import mujoco
 from mujoco import mjx
 
 from hydrax.tasks.g1.g1_velocity_tracking import G1VelocityTracking
-from hydrax.algs.cem import CEM
+from hydrax.tasks.g1.g1_velocity_tracking_augmented import G1VelocityTrackingAugmented
+from hydrax.algs.icem import iCEM
 
 from hydrax.simulation.deterministic import run_interactive
 
 def main():
-    # Initialize task with a target velocity (e.g. 0.6 m/s forward, 0.2 rad/s turn)
-    target_vel = jnp.array([0.6, 0.0, 0.2])
+    # Initialize task with a target velocity
+    target_vel = jnp.array([0.5, 0.0, 0.0])
     print(f"Initializing G1VelocityTracking task with target velocity: {target_vel}")
     task = G1VelocityTracking(target_velocity=target_vel)
+    task_aug = G1VelocityTrackingAugmented(target_velocity=target_vel)
     
-    # Initialize controller
-    print("Initializing PredictiveSampling controller...")
-    ctrl = CEM(
+    # Initialize iCEM controller
+    print("Initializing iCEM controller...")
+    ctrl = iCEM(
         task=task,
         num_samples=32,
         num_elites=8,
         sigma_start=0.5,
         sigma_min=0.05,
-        explore_fraction=0.5,
+        alpha=0.1,              # Momentum smoothing for stable updates
+        noise_beta=2.0,         # Colored noise for smooth locomotion trajectories
+        fraction_elites_reused=0.3,  # Reuse 30% of elites
+        shift_elites=True,      # Warm-start with shifted trajectories
+        use_best_action=True,   # Execute best action instead of mean
         plan_horizon=0.5,
         spline_type="zero",
         num_knots=4,
+        iterations=3,
     )
     
     

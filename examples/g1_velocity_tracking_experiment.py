@@ -13,9 +13,14 @@ import os
 sys.path.append(os.getcwd())
 
 from hydrax.tasks.g1.g1_velocity_tracking import G1VelocityTracking
-from hydrax.tasks.g1.g1_velocity_tracking_augmented import G1VelocityTrackingAugmented
 from hydrax.algs.predictive_sampling import PredictiveSampling
 from hydrax.algs.cem import CEM
+from hydrax.algs.icem import iCEM
+
+# Set seeds for reproducibility
+SEED = 42
+np.random.seed(SEED)
+# Note: JAX random state is managed through explicit keys in controller.init_params(seed=SEED)
 
 def compute_actual_velocity(qvel: np.ndarray, qpos: np.ndarray) -> np.ndarray:
     """Compute base velocity in base frame from world qvel and qpos."""
@@ -107,7 +112,7 @@ def run_rollout(
         # MPC Controller
         print("Initializing MPC controller...")
         # init_params takes (initial_knots, seed)
-        policy_params = controller.init_params(initial_knots=None, seed=0)
+        policy_params = controller.init_params(initial_knots=None, seed=SEED)
         jit_optimize = jax.jit(controller.optimize)
         jit_interp_func = jax.jit(controller.interp_func)
         
@@ -210,50 +215,57 @@ def main():
     class RLController:
         pass
     ctrl1 = RLController()
-    results["RL Only"] = run_rollout(task1, ctrl1, duration)
+    results["RL"] = run_rollout(task1, ctrl1, duration)
     
-    # Scenario 2: RL Policy + MPC
-    print("\n--- Scenario 2: RL Policy + MPC ---")
+    # Scenario 2: CEM
+    print("\n--- Scenario 2: CEM ---")
     task2 = G1VelocityTracking(target_velocity=target_vel)
     ctrl2 = CEM(
         task=task2,
-        num_samples=64,
+        num_samples=32,
         num_elites=8,
-        sigma_start=0.4,
+        sigma_start=0.5,
         sigma_min=0.05,
-        explore_fraction=0.5,
-        plan_horizon=1,
+        plan_horizon=0.5,
         spline_type="zero",
         num_knots=4,
+        iterations=3,
     )
-    results["RL + MPC"] = run_rollout(task2, ctrl2, duration)
     
-    # Scenario 3: RL Policy + MPC + Augmented
-    print("\n--- Scenario 3: RL Policy + MPC + Augmented ---")
-    task3 = G1VelocityTrackingAugmented(target_velocity=target_vel)
-    ctrl3 = CEM(
+    results["CEM"] = run_rollout(task2, ctrl2, duration)
+    
+    # Scenario 3: iCEM
+    print("\n--- Scenario 3: iCEM ---")
+    task3 = G1VelocityTracking(target_velocity=target_vel)
+    ctrl3 = iCEM(
         task=task3,
-        num_samples=64,
+        num_samples=32,
         num_elites=8,
-        sigma_start=0.4,
+        sigma_start=0.5,
         sigma_min=0.05,
-        explore_fraction=0.5,
-        plan_horizon=1,
+        alpha=0.1,              # Momentum smoothing for stable updates
+        noise_beta=2.0,         # Colored noise for smooth locomotion trajectories
+        fraction_elites_reused=0.3,  # Reuse 30% of elites
+        shift_elites=True,      # Warm-start with shifted trajectories
+        use_best_action=True,   # Execute best action instead of mean
+        plan_horizon=0.5,
         spline_type="zero",
         num_knots=4,
+        iterations=3,
     )
-    results["RL + MPC + Aug"] = run_rollout(task3, ctrl3, duration)
+    
+    results["iCEM"] = run_rollout(task3, ctrl3, duration)
     
     # Calculate and print metrics
     print("\n" + "="*60)
-    print(f"{'Metric':<20} | {'RL Only':<12} | {'RL + MPC':<12} | {'RL + MPC + Aug':<12}")
+    print(f"{'Metric':<20} | {'RL':<12} | {'CEM':<12} | {'iCEM':<12}")
     print("-" * 60)
     
     metrics = ["RMSE Vx", "RMSE Vy", "RMSE Vtheta", "Total RMSE"]
     
     for i, label in enumerate(["Vx", "Vy", "Vtheta"]):
         row = [f"RMSE {label}"]
-        for name in ["RL Only", "RL + MPC", "RL + MPC + Aug"]:
+        for name in ["RL", "CEM", "iCEM"]:
             res = results[name]
             # Calculate RMSE for this component
             # Skip first 0.5s to allow for initial transient
@@ -268,7 +280,7 @@ def main():
         
     # Total RMSE
     row = ["Total RMSE"]
-    for name in ["RL Only", "RL + MPC", "RL + MPC + Aug"]:
+    for name in ["RL", "CEM", "iCEM"]:
         res = results[name]
         mask = res["time"] > 0.5
         if not np.any(mask):
@@ -287,7 +299,7 @@ def main():
         "Vtheta": [],
         "Total": []
     }
-    scenarios = ["RL Only", "RL + MPC", "RL + MPC + Aug"]
+    scenarios = ["RL", "CEM", "iCEM"]
     
     for name in scenarios:
         res = results[name]
@@ -308,55 +320,84 @@ def main():
 
     # Plotting Trajectories
     print("\nPlotting results...")
-    fig, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+    
+    # Set publication-quality parameters
+    plt.rcParams.update({
+        'font.size': 12,
+        'axes.labelsize': 14,
+        'axes.titlesize': 14,
+        'xtick.labelsize': 12,
+        'ytick.labelsize': 12,
+        'legend.fontsize': 11,
+        'figure.titlesize': 16,
+        'lines.linewidth': 2.5,
+        'text.usetex': False,  # Set to True if LaTeX is available
+    })
+    
+    fig, axes = plt.subplots(3, 1, figsize=(7, 8), sharex=True)
     
     labels = ["Vx (m/s)", "Vy (m/s)", "Vtheta (rad/s)"]
+    
+    # Color scheme
+    colors = {
+        "RL": "#F48B96",    # Pink/salmon
+        "CEM": "#90CCEB",   # Light blue
+        "iCEM": "#D1E7BE"   # Light green
+    }
     
     for i in range(3):
         ax = axes[i]
         # Plot target
-        ax.plot(results["RL Only"]["time"], results["RL Only"]["target"][:, i], 
+        ax.plot(results["RL"]["time"], results["RL"]["target"][:, i], 
                 'k--', label="Target", linewidth=2)
         
-        # Plot actuals
+        # Plot actuals with specified colors
         for name, res in results.items():
-            ax.plot(res["time"], res["actual"][:, i], label=name)
+            ax.plot(res["time"], res["actual"][:, i], 
+                    color=colors[name], lw=3, label=name)
             
-        ax.set_ylabel(labels[i])
-        ax.grid(True)
+        ax.set_ylabel(labels[i], fontsize=14)
+        ax.grid(True, alpha=0.3)
         if i == 0:
-            ax.legend()
+            ax.legend(loc='best', framealpha=0.9)
             
-    axes[2].set_xlabel("Time (s)")
-    plt.suptitle(f"G1 Velocity Tracking Performance\nTarget: {target_vel}")
+    axes[2].set_xlabel("Time (s)", fontsize=14)
+    fig.suptitle(f"G1 Velocity Tracking Performance", fontsize=16)
     
-    output_path = "g1_tracking_comparison.png"
-    plt.savefig(output_path)
+    plt.tight_layout()
+    output_path = "g1_tracking_comparison.eps"
+    plt.savefig(output_path, format='eps', dpi=300, bbox_inches='tight')
     print(f"Trajectory plot saved to {output_path}")
     
     # Plotting Bar Graph
     print("Plotting metrics bar graph...")
-    fig, ax = plt.subplots(figsize=(10, 6))
+    fig, ax = plt.subplots(figsize=(7, 5))
     
-    x = np.arange(len(scenarios))
-    width = 0.2
-    multiplier = 0
+    # Restructure data: group by metric, show algorithms within each group
+    metric_names = ["Vx", "Vy", "Vtheta", "Total"]
+    x = np.arange(len(metric_names))  # One position per metric
+    width = 0.25  # Width of each bar
     
-    for attribute, measurement in metrics_data.items():
-        offset = width * multiplier
-        rects = ax.bar(x + offset, measurement, width, label=attribute)
-        ax.bar_label(rects, padding=3, fmt='%.3f')
-        multiplier += 1
+    # Plot bars for each algorithm
+    for i, scenario in enumerate(scenarios):
+        offset = (i - 1) * width  # Center the bars around each x position
+        values = [metrics_data[metric][i] for metric in metric_names]
+        rects = ax.bar(x + offset, values, width, 
+                      color=colors[scenario], label=scenario, edgecolor='black', linewidth=0.5)
+        ax.bar_label(rects, padding=3, fmt='%.3f', fontsize=10)
         
-    ax.set_ylabel('RMSE')
-    ax.set_title('Velocity Tracking RMSE by Scenario')
-    ax.set_xticks(x + width * 1.5)
-    ax.set_xticklabels(scenarios)
-    ax.legend(loc='upper left', ncols=4)
-    ax.set_ylim(0, max([max(m) for m in metrics_data.values()]) * 1.2)
+    ax.set_ylabel('RMSE', fontsize=14)
+    ax.set_title('Velocity Tracking RMSE by Component', fontsize=14)
+    ax.set_xticks(x)
+    ax.set_xticklabels(metric_names, fontsize=12)
+    ax.tick_params(axis='y', labelsize=12)
+    ax.legend(loc='upper right', framealpha=0.9, fontsize=11)
+    ax.set_ylim(0, max([max(metrics_data[m]) for m in metric_names]) * 1.3)
+    ax.grid(True, alpha=0.3, axis='y')
     
-    metrics_path = "g1_tracking_metrics.png"
-    plt.savefig(metrics_path)
+    plt.tight_layout()
+    metrics_path = "g1_tracking_metrics.eps"
+    plt.savefig(metrics_path, format='eps', dpi=300, bbox_inches='tight')
     print(f"Metrics plot saved to {metrics_path}")
 
 if __name__ == "__main__":
