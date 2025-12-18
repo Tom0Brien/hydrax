@@ -4,7 +4,8 @@ import jax.numpy as jnp
 import mujoco
 from mujoco import mjx
 
-from hydrax.tasks.g1.g1_locomotion import G1Locomotion
+from hydrax.tasks.g1.g1_navigation import G1Navigation
+from hydrax.tasks.g1.g1_navigation_augmented import G1NavigationAugmented
 from hydrax.algs.predictive_sampling import PredictiveSampling
 from hydrax.algs.cem import CEM
 from hydrax.risk import AverageCost
@@ -12,8 +13,8 @@ from hydrax.simulation.deterministic import run_interactive
 
 def main():
     # Initialize task (now includes goal marker and soccer ball in XML)
-    print("Initializing G1Locomotion task...")
-    task = G1Locomotion()
+    print("Initializing G1Navigation task...")
+    task = G1NavigationAugmented()
     
     # Initialize controller
     print("Initializing PredictiveSampling controller...")

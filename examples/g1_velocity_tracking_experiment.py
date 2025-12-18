@@ -205,7 +205,7 @@ def run_rollout(
 
 def main():
     target_vel = jnp.array([0.5, 0.0, 0.0])  # 0.5 m/s forward
-    duration = 4.0
+    duration = 8
     
     results = {}
     
@@ -222,50 +222,51 @@ def main():
     task2 = G1VelocityTracking(target_velocity=target_vel)
     ctrl2 = CEM(
         task=task2,
-        num_samples=32,
+        num_samples=64,
         num_elites=8,
         sigma_start=0.5,
         sigma_min=0.05,
-        plan_horizon=0.5,
+        plan_horizon=1,
         spline_type="zero",
-        num_knots=4,
-        iterations=3,
+        num_knots=6,
+        iterations=5,
+        explore_fraction=0.25,
     )
     
     results["CEM"] = run_rollout(task2, ctrl2, duration)
     
-    # Scenario 3: iCEM
-    print("\n--- Scenario 3: iCEM ---")
-    task3 = G1VelocityTracking(target_velocity=target_vel)
-    ctrl3 = iCEM(
-        task=task3,
-        num_samples=32,
-        num_elites=8,
-        sigma_start=0.5,
-        sigma_min=0.05,
-        alpha=0.1,              # Momentum smoothing for stable updates
-        noise_beta=2.0,         # Colored noise for smooth locomotion trajectories
-        fraction_elites_reused=0.3,  # Reuse 30% of elites
-        shift_elites=True,      # Warm-start with shifted trajectories
-        use_best_action=True,   # Execute best action instead of mean
-        plan_horizon=0.5,
-        spline_type="zero",
-        num_knots=4,
-        iterations=3,
-    )
-    
-    results["iCEM"] = run_rollout(task3, ctrl3, duration)
+    # # Scenario 3: iCEM
+    # print("\n--- Scenario 3: iCEM ---")
+    # task3 = G1VelocityTracking(target_velocity=target_vel)
+    # ctrl3 = iCEM(
+    #     task=task3,
+    #     num_samples=32,
+    #     num_elites=8,
+    #     sigma_start=0.5,
+    #     sigma_min=0.05,
+    #     alpha=0.1,              # Momentum smoothing for stable updates
+    #     noise_beta=2.0,         # Colored noise for smooth locomotion trajectories
+    #     fraction_elites_reused=0.3,  # Reuse 30% of elites
+    #     shift_elites=True,      # Warm-start with shifted trajectories
+    #     use_best_action=True,   # Execute best action instead of mean
+    #     plan_horizon=0.5,
+    #     spline_type="zero",
+    #     num_knots=4,
+    #     iterations=3,
+    # )
+    # 
+    # results["iCEM"] = run_rollout(task3, ctrl3, duration)
     
     # Calculate and print metrics
-    print("\n" + "="*60)
-    print(f"{'Metric':<20} | {'RL':<12} | {'CEM':<12} | {'iCEM':<12}")
-    print("-" * 60)
+    print("\n" + "="*50)
+    print(f"{'Metric':<20} | {'RL':<12} | {'CEM':<12}")
+    print("-" * 50)
     
     metrics = ["RMSE Vx", "RMSE Vy", "RMSE Vtheta", "Total RMSE"]
     
     for i, label in enumerate(["Vx", "Vy", "Vtheta"]):
         row = [f"RMSE {label}"]
-        for name in ["RL", "CEM", "iCEM"]:
+        for name in ["RL", "CEM"]:
             res = results[name]
             # Calculate RMSE for this component
             # Skip first 0.5s to allow for initial transient
@@ -276,11 +277,11 @@ def main():
             error = res["actual"][mask, i] - res["target"][mask, i]
             rmse = np.sqrt(np.mean(error**2))
             row.append(f"{rmse:.4f}")
-        print(f"{row[0]:<20} | {row[1]:<12} | {row[2]:<12} | {row[3]:<12}")
+        print(f"{row[0]:<20} | {row[1]:<12} | {row[2]:<12}")
         
     # Total RMSE
     row = ["Total RMSE"]
-    for name in ["RL", "CEM", "iCEM"]:
+    for name in ["RL", "CEM"]:
         res = results[name]
         mask = res["time"] > 0.5
         if not np.any(mask):
@@ -289,8 +290,8 @@ def main():
         error = res["actual"][mask] - res["target"][mask]
         rmse = np.sqrt(np.mean(np.sum(error**2, axis=1)))
         row.append(f"{rmse:.4f}")
-    print(f"{row[0]:<20} | {row[1]:<12} | {row[2]:<12} | {row[3]:<12}")
-    print("="*60 + "\n")
+    print(f"{row[0]:<20} | {row[1]:<12} | {row[2]:<12}")
+    print("="*50 + "\n")
 
     # Collect metrics for plotting
     metrics_data = {
@@ -299,7 +300,7 @@ def main():
         "Vtheta": [],
         "Total": []
     }
-    scenarios = ["RL", "CEM", "iCEM"]
+    scenarios = ["RL", "CEM"]
     
     for name in scenarios:
         res = results[name]
@@ -393,7 +394,6 @@ def main():
     ax.tick_params(axis='y', labelsize=12)
     ax.legend(loc='upper right', framealpha=0.9, fontsize=11)
     ax.set_ylim(0, max([max(metrics_data[m]) for m in metric_names]) * 1.3)
-    ax.grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
     metrics_path = "g1_tracking_metrics.eps"

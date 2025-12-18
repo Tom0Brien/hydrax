@@ -17,7 +17,7 @@ CHECKPOINT_PATH = str(
 )
 ENV_NAME = "G1JoystickFlatTerrain"
 
-class G1Locomotion(Task):
+class G1Navigation(Task):
     """G1 humanoid locomotion task using trained joystick policy.
     
     This task wraps the mujoco_playground G1 environment and its trained
@@ -73,7 +73,7 @@ class G1Locomotion(Task):
         Returns:
             Jitted inference function
         """
-        # Import brax here to avoid import errors when G1Locomotion isn't used
+        # Import brax here to avoid import errors when G1Navigation isn't used
         from brax.training.agents.ppo import networks as ppo_networks  # noqa: E402
         from brax.training.agents.ppo import train as ppo  # noqa: E402
         

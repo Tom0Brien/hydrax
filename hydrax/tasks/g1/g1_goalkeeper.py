@@ -3,13 +3,13 @@ import jax.numpy as jnp
 import mujoco
 from mujoco import mjx
 
-from hydrax.tasks.g1.g1_locomotion import G1Locomotion
+from hydrax.tasks.g1.g1_navigation import G1Navigation
 
 
-class G1Goalkeeper(G1Locomotion):
+class G1Goalkeeper(G1Navigation):
     """G1 humanoid goalkeeper task: intercept and stop ball from goal.
     
-    Extends G1Locomotion with augmented action space:
+    Extends G1Navigation with augmented action space:
     - Actions 0-2: velocity commands (vx, vy, vtheta) for RL policy
     - Actions 3-31: residual adjustments for all 29 robot joints
     

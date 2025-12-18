@@ -52,7 +52,7 @@ class G1VelocityTrackingAugmented(G1VelocityTracking):
         leg_residuals = control[3:15]
         
         # Get base motor targets from RL policy using parent's method
-        # Note: G1VelocityTracking inherits apply_control from G1Locomotion
+        # Note: G1VelocityTracking inherits apply_control from G1Navigation
         state = super().apply_control(state, velocity_cmd)
         
         # Add residuals to first 12 motor targets (leg joints)

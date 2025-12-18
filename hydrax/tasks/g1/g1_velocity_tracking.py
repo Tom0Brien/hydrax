@@ -2,9 +2,9 @@ import jax
 import jax.numpy as jnp
 from mujoco import mjx
 
-from hydrax.tasks.g1.g1_locomotion import G1Locomotion
+from hydrax.tasks.g1.g1_navigation import G1Navigation
 
-class G1VelocityTracking(G1Locomotion):
+class G1VelocityTracking(G1Navigation):
     """G1 humanoid velocity tracking task.
     
     The goal is to track a desired velocity vector (vx, vy, vtheta).

@@ -6,15 +6,19 @@ from mujoco import mjx
 from hydrax.tasks.g1.g1_navigation import G1Navigation
 
 
-class G1Soccer(G1Navigation):
+class G1SoccerAugmented(G1Navigation):
     """G1 humanoid soccer task: push the ball to the goal position.
     
-    Extends G1Navigation with soccer-specific cost function.
-    Uses 3D action space (velocity commands only, no residuals).
+    Extends G1Navigation with augmented action space:
+    - Actions 0-2: velocity commands (vx, vy, vtheta) for RL policy
+    - Actions 3-14: residual adjustments for first 12 joints (leg joints)
+    
+    This hierarchical control enables fine-tuning leg movements for kicking
+    while maintaining stable locomotion from the trained RL policy.
     """
     
     def __init__(self):
-        """Initialize G1 soccer task."""
+        """Initialize G1 soccer task with augmented action space."""
         super().__init__()
         
         # Get soccer ball body ID
@@ -36,6 +40,22 @@ class G1Soccer(G1Navigation):
         if self._goal_marker_id == -1:
             raise ValueError("Goal marker body not found in model")
         
+        # Augmented action space: 3 velocity + 12 leg residuals
+        self.nu = 15
+        self.u_min = jnp.concatenate([
+            jnp.array([-1.0, -1.0, -1.0]),  # Velocity bounds
+            jnp.full(12, -0.3)  # Residual bounds (±0.3 rad)
+        ])
+        self.u_max = jnp.concatenate([
+            jnp.array([1.0, 1.0, 1.0]),  # Velocity bounds
+            jnp.full(12, 0.3)  # Residual bounds (±0.3 rad)
+        ])
+        
+        # Leg joint indices (first 12 of 29 robot joints)
+        # Left leg: hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll
+        # Right leg: hip_pitch, hip_roll, hip_yaw, knee, ankle_pitch, ankle_roll
+        self._leg_joint_count = 12
+        
         # Get torso site for height tracking
         self._torso_site_id = mujoco.mj_name2id(
             self.mj_model, mujoco.mjtObj.mjOBJ_SITE, "imu_in_torso"
@@ -45,6 +65,45 @@ class G1Soccer(G1Navigation):
         
         # Target torso height (standing height)
         self.target_height = 0.75
+    
+    def apply_control(
+        self,
+        state: mjx.Data,
+        control: jax.Array
+    ) -> mjx.Data:
+        """Apply hierarchical control with RL policy + leg residuals.
+        
+        Args:
+            state: Current mjx.Data state
+            control: 15D control [vx, vy, vtheta, leg_residuals_0-11]
+            
+        Returns:
+            State with updated ctrl (motor targets + residuals)
+        """
+        # Extract velocity commands for RL policy (first 3)
+        velocity_cmd = control[:3]
+        
+        # Extract leg joint residuals (next 12)
+        leg_residuals = control[3:15]
+        
+        # Get base motor targets from RL policy using parent's method
+        state = super().apply_control(state, velocity_cmd)
+        
+        # Add residuals to first 12 motor targets (leg joints)
+        motor_targets = state.ctrl
+        leg_indices = slice(0, self._leg_joint_count)
+        motor_targets_with_residuals = motor_targets.at[leg_indices].add(
+            leg_residuals
+        )
+        
+        # Clip to joint limits
+        motor_targets_with_residuals = jnp.clip(
+            motor_targets_with_residuals,
+            self.mj_model.jnt_range[1:30, 0],
+            self.mj_model.jnt_range[1:30, 1],
+        )
+        
+        return state.replace(ctrl=motor_targets_with_residuals)
     
     def _get_ball_position(self, state: mjx.Data) -> jax.Array:
         """Get soccer ball XY position."""
@@ -156,12 +215,13 @@ class G1Soccer(G1Navigation):
     ) -> jax.Array:
         """Cost to push ball to goal position.
         
-        Cost drives five behaviors:
+        Cost drives six behaviors:
         1. Move ball to goal
         2. Position robot 0.5m behind ball
         3. Orient robot (approach -> kick transition)
         4. Maintain upright posture (prevent falling)
         5. Regularize velocity commands
+        6. Regularize leg residuals (prevent destabilization)
         """
         # Main cost: ball to goal distance
         ball_to_goal_err = self._get_ball_to_goal_error(state)
@@ -176,18 +236,24 @@ class G1Soccer(G1Navigation):
         height_err = self._get_torso_height(state) - self.target_height
         height_cost = jnp.square(height_err)
         
-        # Control regularization (3D velocity commands only)
-        velocity_cost = jnp.sum(jnp.square(control))
+        # Control regularization
+        velocity_cmd = control[:3]
+        leg_residuals = control[3:15]
+        
+        velocity_cost = jnp.sum(jnp.square(velocity_cmd))
+        residual_cost = jnp.sum(jnp.square(leg_residuals))
         
         # Weighted combination
         # Ball to goal (1.0), position (0.3), orient (0.2),
-        # height (0.5 - prevent falling), velocity (0.01)
+        # height (0.5 - prevent falling), velocity (0.01),
+        # residuals (0.05 - prevent instability)
         return (
             ball_to_goal_cost
             + 0.3 * robot_position_cost
             + 0.2 * robot_orientation_cost
             + 0.5 * height_cost
             + 0.01 * velocity_cost
+            + 0.05 * residual_cost
         )
     
     def terminal_cost(self, state: mjx.Data) -> jax.Array:

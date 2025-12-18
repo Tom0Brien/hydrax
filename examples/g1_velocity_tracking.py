@@ -32,7 +32,7 @@ def main():
         plan_horizon=0.5,
         spline_type="zero",
         num_knots=4,
-        iterations=3,
+        iterations=1,
     )
     
     
