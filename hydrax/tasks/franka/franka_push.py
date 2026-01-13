@@ -2,7 +2,7 @@
 
 import functools
 from pathlib import Path
-from typing import Any
+from typing import Any, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -106,8 +106,8 @@ class FrankaPushCube(Task):
         # Override nu to 7 (joint residuals for 7-DOF arm)
         self.nu = 7
         # Small residual bounds initially - policy should work out of the box
-        self.u_min = jnp.full(7, -0.1)
-        self.u_max = jnp.full(7, 0.1)
+        self.u_min = jnp.full(7, -10)
+        self.u_max = jnp.full(7, 10)
         
         # Load RL policy
         self.inference_fn = self._load_policy(manipulation_params, wrapper)
@@ -128,6 +128,24 @@ class FrankaPushCube(Task):
         self.ctrl_dt = 0.02
         # Recompute n_substeps after changing ctrl_dt
         self.n_substeps = max(1, round(self.ctrl_dt / self.dt))
+    
+    def reset(self, rng: jax.Array) -> Tuple[mujoco.MjData, mjx.Data]:
+        """Reset the environment with randomized object and target positions.
+        
+        Args:
+            rng: JAX random key
+            
+        Returns:
+            Tuple of (mj_data, mjx_data) for simulation and controller
+        """
+        # Use playground environment reset
+        playground_state = self.env.reset(rng)
+        
+        # Convert to mujoco.MjData
+        mj_data = mjx.get_data(self.mj_model, playground_state.data)
+        mujoco.mj_forward(self.mj_model, mj_data)
+        
+        return mj_data, playground_state.data
     
     def _load_policy(
         self,

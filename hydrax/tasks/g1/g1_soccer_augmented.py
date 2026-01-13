@@ -65,6 +65,18 @@ class G1SoccerAugmented(G1Navigation):
         
         # Target torso height (standing height)
         self.target_height = 0.75
+        
+        # Energy tank parameters
+        self.tank_capacity = 10.0      # Maximum energy in tank (Joules)
+        self.tank_initial = 5.0        # Initial energy level
+        self.tank_recharge_rate = 2.0  # Recharge rate (Joules/second)
+        
+        # Get actuator kp gains for leg joints (first 12 actuators)
+        # These are position-controlled actuators: τ = kp * (q_target - q_actual)
+        # The kp values are stored in mj_model.actuator_gainprm[:, 0]
+        self._leg_actuator_kp = jnp.array(
+            self.mj_model.actuator_gainprm[:self._leg_joint_count, 0]
+        )
     
     def apply_control(
         self,
@@ -103,7 +115,11 @@ class G1SoccerAugmented(G1Navigation):
             self.mj_model.jnt_range[1:30, 1],
         )
         
-        return state.replace(ctrl=motor_targets_with_residuals)
+        # Store residuals in userdata[1:13] for energy tank computation in step()
+        # userdata[0] = tank level, userdata[1:13] = current residuals
+        new_userdata = state.userdata.at[1:13].set(leg_residuals)
+        
+        return state.replace(ctrl=motor_targets_with_residuals, userdata=new_userdata)
     
     def _get_ball_position(self, state: mjx.Data) -> jax.Array:
         """Get soccer ball XY position."""
@@ -259,4 +275,64 @@ class G1SoccerAugmented(G1Navigation):
     def terminal_cost(self, state: mjx.Data) -> jax.Array:
         """Terminal cost (no control regularization)."""
         return self.running_cost(state, jnp.zeros(self.nu))
+    
+    def step(self, model: mjx.Model, state: mjx.Data) -> mjx.Data:
+        """Custom step function with energy tank dynamics.
+        
+        Overrides base Task.step to update the energy tank stored in userdata[0].
+        
+        Energy tank dynamics:
+        - Consumption: Based on mechanical power from leg residuals (|Δτ · q̇|)
+        - Recharge: Fixed rate over time
+        - Bounds: Clamped between 0 and tank_capacity
+        
+        Residuals are read from userdata[1:13] where they were stored by apply_control.
+        
+        Args:
+            model: The MuJoCo MJX model.
+            state: The current state.
+            
+        Returns:
+            The next state with updated energy tank.
+        """
+        # Get current tank level
+        tank_energy = state.userdata[0]
+        
+        # Get residuals stored by apply_control in userdata[1:13]
+        # NOTE: Residuals are POSITION OFFSETS (radians), not torques
+        residuals = state.userdata[1:13]
+        
+        # Get leg joint velocities (qvel indices: skip 6 DOF freejoint)
+        leg_qvel = state.qvel[6:6 + self._leg_joint_count]
+        
+        # Convert position residuals to torque contributions
+        # For position-controlled actuators: τ = kp * (q_target - q_actual)
+        # The residual's contribution to torque: Δτ = kp * residual
+        residual_torques = self._leg_actuator_kp * residuals
+        
+        # Compute power: P = |Δτ · q̇| = |kp * residual · q̇|
+        # This is the mechanical work rate from the residual torques
+        power = jnp.sum(jnp.abs(residual_torques * leg_qvel))
+        
+        # Energy consumed this step
+        energy_consumed = power * self.ctrl_dt
+        
+        # Energy recharged this step
+        energy_recharged = self.tank_recharge_rate * self.ctrl_dt
+        
+        # Update tank: consume then recharge
+        new_tank = tank_energy - energy_consumed + energy_recharged
+        new_tank = jnp.clip(new_tank, 0.0, self.tank_capacity)
+        
+        # Perform physics substeps
+        def single_step(data, _):
+            return mjx.step(model, data), None
+        
+        state = jax.lax.scan(single_step, state, None, self.n_substeps)[0]
+        
+        # Store updated tank level (preserve residuals in userdata[1:13])
+        new_userdata = state.userdata.at[0].set(new_tank)
+        state = state.replace(userdata=new_userdata)
+        
+        return state
 
