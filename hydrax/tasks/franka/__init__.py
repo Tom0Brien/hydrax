@@ -1,6 +1,5 @@
 """Franka Emika Panda manipulation tasks."""
 
-from hydrax.tasks.franka.franka_push import FrankaPushCube
 from hydrax.tasks.franka.franka_push_geometry import FrankaPushGeometry
 from hydrax.tasks.franka.perturbations import (
     PerturbationConfig,
@@ -12,7 +11,6 @@ from hydrax.tasks.franka.perturbations import (
 )
 
 __all__ = [
-    "FrankaPushCube",
     "FrankaPushGeometry",
     "PerturbationConfig",
     "apply_perturbation",

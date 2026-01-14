@@ -1,7 +1,7 @@
 """Franka push task with configurable object geometry.
 
 This module provides task variants for testing robustness with different
-object geometries: cube (original), cylinder, and T-block.
+object geometries: cube (original), square, and T-block.
 """
 
 from pathlib import Path
@@ -10,6 +10,7 @@ from typing import Literal, Optional
 import jax
 import jax.numpy as jnp
 import mujoco
+import numpy as np
 from mujoco import mjx
 from mujoco.mjx._src import math
 
@@ -22,22 +23,84 @@ _XMLS_PATH = (
     / "mujoco_playground/mujoco_playground/_src/manipulation/franka_emika_panda_robotiq/xmls"
 )
 
+# Checkpoint path for trained RL policy
+CHECKPOINT_PATH = (
+    Path(__file__).parent.parent.parent.parent.parent
+    / "mujoco_playground/logs/PandaRobotiqPushCube-20260108-150347/checkpoints"
+)
+
 # Available geometries and their XML files
 # Note: MJX only supports box-box, box-plane collisions well
 # "square" is a cube with equal sides (different from original rectangular cube)
 GEOMETRY_XMLS = {
     "cube": "scene_panda_robotiq_cube.xml",
-    "square": "scene_panda_robotiq_square.xml",  # Square cube (0.06 x 0.06 x 0.06)
+    "square": "scene_panda_robotiq_square.xml",  # Square cube (0.05073 x 0.05073 x 0.05073)
     "tblock": "scene_panda_robotiq_tblock.xml",   # T-shaped (two boxes)
 }
 
 GeometryType = Literal["cube", "square", "tblock"]
 
 
+def _load_checkpoint_compat(path):
+    """Load checkpoint with compatibility for different brax versions.
+    
+    Extracts the essential data needed for inference:
+    - mean/std for observation normalization  
+    - policy network parameters
+    
+    Handles both newer brax (stores mean/std directly) and older versions.
+    """
+    import numpy as np
+    from etils import epath
+    from orbax import checkpoint as ocp
+    import jax
+    import logging
+    
+    path = epath.Path(path)
+    if not path.exists():
+        raise ValueError(f'checkpoint path does not exist: {path.as_posix()}')
+    
+    logging.info('restoring from checkpoint %s', path.as_posix())
+    
+    metadata = ocp.PyTreeCheckpointer().metadata(path).item_metadata
+    restore_args = jax.tree.map(
+        lambda _: ocp.RestoreArgs(restore_type=np.ndarray), metadata
+    )
+    orbax_checkpointer = ocp.PyTreeCheckpointer()
+    target = orbax_checkpointer.restore(
+        path, ocp.args.PyTreeRestore(restore_args=restore_args), item=None
+    )
+    
+    # Extract normalizer stats and policy params
+    # Target is a tuple/list: (normalizer_params, policy_params)
+    stats_dict = target[0]
+    policy_params = target[1]
+    
+    logging.info(f'Checkpoint normalizer fields: {stats_dict.keys()}')
+    
+    # Get mean/std for normalization
+    if 'mean' in stats_dict:
+        # Newer brax format - use mean/std directly
+        mean = np.array(stats_dict['mean'])
+        std = np.array(stats_dict['std'])
+    else:
+        # Older brax format - would need to compute from count/summed_variance
+        # For now, assume no normalization if these aren't available
+        logging.warning("Old brax checkpoint format - normalization may not work correctly")
+        mean = None
+        std = None
+    
+    return {
+        'mean': mean,
+        'std': std,
+        'policy_params': policy_params,
+    }
+
+
 class FrankaPushGeometry(Task):
     """Franka push task with configurable object geometry.
     
-    Similar to FrankaPushCube but allows selecting different object geometries
+    Allows selecting different object geometries
     to test robustness of the RL+SPC approach under geometry mismatch.
     
     Note: The RL policy was trained on the cube. Using cylinder or tblock
@@ -81,8 +144,8 @@ class FrankaPushGeometry(Task):
         
         # Override nu to 7 (joint residuals for 7-DOF arm)
         self.nu = 7
-        self.u_min = jnp.full(7, -10.0)
-        self.u_max = jnp.full(7, 10.0)
+        self.u_min = jnp.full(7, -5.0)
+        self.u_max = jnp.full(7, 5.0)
         
         # Store key body/geom/site IDs
         self._obj_body = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "box")
@@ -111,8 +174,6 @@ class FrankaPushGeometry(Task):
     
     def _load_policy(self):
         """Load the cube-trained RL policy for residual control."""
-        # Import the policy loading from FrankaPushCube
-        from hydrax.tasks.franka.franka_push import _load_checkpoint_compat, CHECKPOINT_PATH
         from mujoco_playground.config import manipulation_params
         from brax.training.agents.ppo import networks as ppo_networks
         from etils import epath
@@ -294,6 +355,116 @@ class FrankaPushGeometry(Task):
         
         return mj_data, mjx_data
     
+    def mjx_reset(self, rng: jax.Array) -> mjx.Data:
+        """Pure MJX reset (fully jittable, can be vmapped for parallel envs).
+        
+        This method creates an mjx.Data directly without using mujoco.MjData,
+        making it compatible with jax.vmap for batched parallel environments.
+        
+        Args:
+            rng: JAX random key
+            
+        Returns:
+            mjx.Data with randomized initial state
+        """
+        # Home keyframe values (extracted from model)
+        home_qpos = jnp.array([
+            -0.182772, 0.146282, 0.172246, -2.24238, -0.0788546, 2.45127, 0.0160022,  # arm (7)
+            0.8, 0.8, 0.8, 0.8, 0.8, 0.8,  # gripper (6)
+            0.56784, -0.0253974, 0.0306525,  # box position (3)
+            0.0, 0.0, 0.0, 1.0,  # box quaternion wxyz (4)
+        ])
+        home_ctrl = jnp.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.82])
+        
+        # Split RNG
+        rng, rng_box1, rng_box2, rng_target, rng_robot_arm, rng_theta = jax.random.split(rng, 6)
+        
+        # Joint limits and perturbation
+        jnt_range = jnp.array([
+            [-2.8973, 2.8973],
+            [-1.7628, 1.7628],
+            [-2.8973, 2.8973],
+            [-3.0718, -0.0698],
+            [-2.8973, 2.8973],
+            [-0.0175, 3.7525],
+            [-2.8973, 2.8973],
+        ])
+        joint_range_init_percent_limit = jnp.array([0.2, 0.2, 0.2, 0.2, 0.3, 0.3, 0.3])
+        
+        # Randomize arm joints
+        arm_noise = 0.3 * jax.random.uniform(
+            rng_robot_arm,
+            (7,),
+            minval=jnt_range[:, 0] * joint_range_init_percent_limit,
+            maxval=jnt_range[:, 1] * joint_range_init_percent_limit,
+        )
+        
+        # Initial object position from keyframe
+        init_obj_pos = home_qpos[13:16]
+        
+        # Sampling bounds
+        OBJ_SAMPLE_MIN = jnp.array([0.4, -0.2, -0.005])
+        OBJ_SAMPLE_MAX = jnp.array([0.65, 0.2, 0.04])
+        
+        # Box position randomization
+        box_offset = 0.15
+        rng_box1_x, rng_box1_y = jax.random.split(rng_box1)
+        box_x = jax.random.uniform(rng_box1_x, 
+            minval=init_obj_pos[0] - box_offset * 0.4,
+            maxval=init_obj_pos[0] + box_offset * 0.4)
+        box_y = jax.random.uniform(rng_box1_y,
+            minval=init_obj_pos[1] - box_offset,
+            maxval=init_obj_pos[1] + box_offset)
+        box_x = jnp.clip(box_x, OBJ_SAMPLE_MIN[0], OBJ_SAMPLE_MAX[0])
+        box_y = jnp.clip(box_y, OBJ_SAMPLE_MIN[1], OBJ_SAMPLE_MAX[1])
+        
+        # Box quaternion: random rotation around Z axis
+        box_theta = jax.random.uniform(rng_box2, minval=0, maxval=2*jnp.pi)
+        box_quat = jnp.array([jnp.cos(box_theta/2), 0.0, 0.0, jnp.sin(box_theta/2)])
+        
+        # Target position randomization
+        target_offset = 0.05
+        rng_target_x, rng_target_y = jax.random.split(rng_target)
+        target_x = jax.random.uniform(rng_target_x,
+            minval=init_obj_pos[0] - target_offset * 0.4,
+            maxval=init_obj_pos[0] + target_offset * 0.4)
+        target_y = jax.random.uniform(rng_target_y,
+            minval=init_obj_pos[1] - target_offset,
+            maxval=init_obj_pos[1] + target_offset)
+        target_x = jnp.clip(target_x, OBJ_SAMPLE_MIN[0], OBJ_SAMPLE_MAX[0])
+        target_y = jnp.clip(target_y, OBJ_SAMPLE_MIN[1], OBJ_SAMPLE_MAX[1])
+        target_z = init_obj_pos[2]
+        
+        # Target quaternion
+        target_theta = jax.random.uniform(rng_theta, minval=0, maxval=45*jnp.pi/180)
+        target_quat = jnp.array([jnp.cos(target_theta/2), 0.0, 0.0, jnp.sin(target_theta/2)])
+        
+        # Build qpos
+        qpos = home_qpos.at[:7].set(home_qpos[:7] + arm_noise)
+        qpos = qpos.at[13].set(box_x)
+        qpos = qpos.at[14].set(box_y)
+        qpos = qpos.at[16:20].set(box_quat)
+        
+        # Build mocap arrays
+        mocap_pos = jnp.array([[target_x, target_y, target_z]])
+        mocap_quat = jnp.array([target_quat])
+        
+        # Create mjx.Data from model with randomized state
+        mjx_data = mjx.make_data(self.mj_model, nconmax=256, njmax=256)
+        mjx_data = mjx_data.replace(
+            qpos=qpos,
+            qvel=jnp.zeros_like(mjx_data.qvel),
+            ctrl=home_ctrl,
+            mocap_pos=mocap_pos,
+            mocap_quat=mocap_quat,
+            time=jnp.array(0.0),
+        )
+        
+        # Run forward kinematics to compute xpos, xquat, etc.
+        mjx_data = mjx.forward(self.model, mjx_data)
+        
+        return mjx_data
+    
     def _get_obs(self, state: mjx.Data) -> jax.Array:
         """Compute observation from state (matching cube policy expectations)."""
         target_pos = state.mocap_pos[self._mocap_target, :].ravel()
@@ -383,9 +554,9 @@ class FrankaPushGeometry(Task):
         residual_cost = jnp.sum(jnp.square(control))
         
         return (
-            8.0 * obj_target_cost
-            + 2.0 * gripper_obj_cost
-            + 6.0 * orientation_cost
+            10.0 * obj_target_cost
+            + 5.0 * gripper_obj_cost
+            + 1.0 * orientation_cost
             + 0.1 * residual_cost
         )
     

@@ -38,7 +38,7 @@ def run_rollout(
     """Run a deterministic rollout and return data.
     
     Args:
-        task: FrankaPushCube task
+        task: FrankaPushGeometry task
         controller: CEM controller or None for RL-only
         reset_seed: Random seed for playground env reset (ensures reproducibility)
         duration: Rollout duration in seconds
@@ -178,7 +178,7 @@ def run_rollout(
 def main():
     """Run comparison experiment."""
     # Experiment parameters
-    reset_seed = 42  # Same seed for both conditions (fair comparison)
+    reset_seed = 42  # Same seed for all conditions (fair comparison)
     duration = 8.0  # seconds
     
     results = {}
@@ -190,7 +190,7 @@ def main():
     task1 = FrankaPushGeometry(geometry="cube", use_rl_policy=True)
     results["RL"] = run_rollout(task1, None, reset_seed=reset_seed, duration=duration)
     
-    # Scenario 2: RL + SPC (CEM)
+    # Scenario 2: RL + SPC (CEM) - residual mode with small sigma
     print("\n" + "="*50)
     print("Scenario 2: RL + SPC (CEM)")
     print("="*50)
@@ -208,10 +208,28 @@ def main():
     )
     results["RL+SPC"] = run_rollout(task2, ctrl2, reset_seed=reset_seed, duration=duration)
     
+    # Scenario 3: SPC Only (no RL policy) - needs larger control exploration
+    print("\n" + "="*50)
+    print("Scenario 3: SPC Only (no RL policy)")
+    print("="*50)
+    task3 = FrankaPushGeometry(geometry="cube", use_rl_policy=False)
+    ctrl3 = CEM(
+        task=task3,
+        num_samples=128,
+        num_elites=16,
+        sigma_start=0.1,
+        sigma_min=0.05,
+        explore_fraction=0.5,
+        plan_horizon=0.5,
+        spline_type="zero",
+        num_knots=6,
+    )
+    results["SPC"] = run_rollout(task3, ctrl3, reset_seed=reset_seed, duration=duration)
+    
     # Calculate metrics
-    print("\n" + "="*60)
-    print(f"{'Metric':<30} | {'RL':<12} | {'RL+SPC':<12}")
-    print("-" * 60)
+    print("\n" + "="*80)
+    print(f"{'Metric':<30} | {'RL':<12} | {'RL+SPC':<12} | {'SPC':<12}")
+    print("-" * 80)
     
     for name, res in results.items():
         # Skip first 1s for transient
@@ -243,14 +261,26 @@ def main():
         }
     
     # Print metrics
-    print(f"{'Mean Distance (m)':<30} | {results['RL']['metrics']['mean_dist']:<12.4f} | {results['RL+SPC']['metrics']['mean_dist']:<12.4f}")
-    print(f"{'Final Distance (m)':<30} | {results['RL']['metrics']['final_dist']:<12.4f} | {results['RL+SPC']['metrics']['final_dist']:<12.4f}")
-    print(f"{'Min Distance (m)':<30} | {results['RL']['metrics']['min_dist']:<12.4f} | {results['RL+SPC']['metrics']['min_dist']:<12.4f}")
+    def fmt_time(t):
+        return f"{t:.2f}" if t != float('inf') else "N/A"
     
-    time_rl = results['RL']['metrics']['time_to_5cm']
-    time_spc = results['RL+SPC']['metrics']['time_to_5cm']
-    print(f"{'Time to 5cm (s)':<30} | {time_rl if time_rl != float('inf') else 'N/A':<12} | {time_spc if time_spc != float('inf') else 'N/A':<12}")
-    print("="*60 + "\n")
+    print(f"{'Mean Distance (m)':<30} | "
+          f"{results['RL']['metrics']['mean_dist']:<12.4f} | "
+          f"{results['RL+SPC']['metrics']['mean_dist']:<12.4f} | "
+          f"{results['SPC']['metrics']['mean_dist']:<12.4f}")
+    print(f"{'Final Distance (m)':<30} | "
+          f"{results['RL']['metrics']['final_dist']:<12.4f} | "
+          f"{results['RL+SPC']['metrics']['final_dist']:<12.4f} | "
+          f"{results['SPC']['metrics']['final_dist']:<12.4f}")
+    print(f"{'Min Distance (m)':<30} | "
+          f"{results['RL']['metrics']['min_dist']:<12.4f} | "
+          f"{results['RL+SPC']['metrics']['min_dist']:<12.4f} | "
+          f"{results['SPC']['metrics']['min_dist']:<12.4f}")
+    print(f"{'Time to 5cm (s)':<30} | "
+          f"{fmt_time(results['RL']['metrics']['time_to_5cm']):<12} | "
+          f"{fmt_time(results['RL+SPC']['metrics']['time_to_5cm']):<12} | "
+          f"{fmt_time(results['SPC']['metrics']['time_to_5cm']):<12}")
+    print("="*80 + "\n")
     
     # Plotting
     print("Plotting results...")
@@ -270,6 +300,7 @@ def main():
     colors = {
         "RL": "#F48B96",      # Pink/salmon
         "RL+SPC": "#90CCEB",  # Light blue
+        "SPC": "#9ACD32",     # Yellow-green
     }
     
     # Figure 1: Distance over time

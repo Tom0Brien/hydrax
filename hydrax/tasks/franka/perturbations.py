@@ -153,27 +153,26 @@ def get_geometry_perturbations() -> List[PerturbationConfig]:
 
 
 def get_full_perturbations() -> List[PerturbationConfig]:
-    """Get comprehensive set including both physics and geometry perturbations."""
-    perturbations = []
+    """Get focused set covering physics and geometry perturbations.
     
-    # Physics perturbations on cube (original geometry)
-    perturbations.extend(get_standard_perturbations())
-    
-    # Geometry perturbations with nominal physics
-    for geom in ["square", "tblock"]:
-        perturbations.append(
-            PerturbationConfig(name=f"{geom}_nominal", 
-                             mass_scale=1.0, friction_scale=1.0, geometry=geom)
-        )
-        # Also test geometry + physics combinations
-        perturbations.append(
-            PerturbationConfig(name=f"{geom}_heavy",
-                             mass_scale=2.0, friction_scale=1.0, geometry=geom)
-        )
-        perturbations.append(
-            PerturbationConfig(name=f"{geom}_slippery",
-                             mass_scale=1.0, friction_scale=0.3, geometry=geom)
-        )
-    
-    return perturbations
+    Includes 8 conditions:
+    - 4 physics conditions on cube (nominal, heavy, slippery, heavy+slippery)
+    - 2 geometry variants with nominal physics (square, tblock)
+    - 2 geometry variants with challenging physics (square heavy, tblock slippery)
+    """
+    return [
+        # Physics perturbations on cube (training geometry)
+        PerturbationConfig(name="nominal", mass_scale=1.0, friction_scale=1.0, geometry="cube"),
+        PerturbationConfig(name="heavy", mass_scale=2.0, friction_scale=1.0, geometry="cube"),
+        PerturbationConfig(name="slippery", mass_scale=1.0, friction_scale=0.3, geometry="cube"),
+        PerturbationConfig(name="heavy_slippery", mass_scale=2.0, friction_scale=0.3, geometry="cube"),
+        
+        # Geometry variations with nominal physics
+        PerturbationConfig(name="nominal", mass_scale=1.0, friction_scale=1.0, geometry="square"),
+        PerturbationConfig(name="nominal", mass_scale=1.0, friction_scale=1.0, geometry="tblock"),
+        
+        # Geometry + physics (most challenging)
+        PerturbationConfig(name="heavy", mass_scale=2.0, friction_scale=1.0, geometry="square"),
+        PerturbationConfig(name="slippery", mass_scale=1.0, friction_scale=0.3, geometry="tblock"),
+    ]
 
