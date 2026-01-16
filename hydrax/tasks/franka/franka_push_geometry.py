@@ -234,13 +234,17 @@ class FrankaPushGeometry(Task):
                     if normalize_observations:
                         obs = (obs - mean) / (std + 1e-8)
                     output = ppo_network.policy_network.apply({}, policy_params, obs)
-                    action = output[:action_size]
-                    return action, {}
+                    dist = ppo_network.parametric_action_distribution.create_dist(output)
+                    action = dist.loc
+                    action_std = dist.scale
+                    return action, action_std
             else:
                 def inference_fn(obs, rng):
                     output = ppo_network.policy_network.apply({}, policy_params, obs)
-                    action = output[:action_size]
-                    return action, {}
+                    dist = ppo_network.parametric_action_distribution.create_dist(output)
+                    action = dist.loc
+                    action_std = dist.scale
+                    return action, action_std
             return inference_fn
         
         inference_fn = make_inference_fn(mean, std, policy_params, normalize_observations, ppo_network, action_size)
@@ -547,19 +551,77 @@ class FrankaPushGeometry(Task):
         return jnp.square(ori_error)
     
     def running_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
-        """Running cost for the push task."""
+        """Running cost for the push task.
+        
+        The residual penalty is formulated as the KL-Divergence between the
+        control distribution and the RL policy's prior, resulting in a 
+        Mahalanobis distance penalty: (delta_u)^T * Sigma^-1 * (delta_u).
+        """
         obj_target_cost = self._get_box_target_cost(state)
         gripper_obj_cost = self._get_gripper_obj_cost(state)
         orientation_cost = self._get_orientation_cost(state)
-        residual_cost = jnp.sum(jnp.square(control))
+        
+        # Information Theoretic MPC regularization
+        if self.inference_fn is not None:
+            obs = self._get_obs(state)
+            rng = jax.random.PRNGKey(0)
+            # Get policy variance (diagonal covariance)
+            _, policy_std = self.inference_fn(obs, rng)
+            # Mahalanobis distance: sum((delta_u / std)^2)
+            # We use a small epsilon to avoid division by zero if std is very small
+            inv_var = 1.0 / (jnp.square(policy_std) + 1e-6)
+            residual_cost = jnp.sum(inv_var * jnp.square(control))
+            
+            # Lambda scaling factor (inverse temperature)
+            # Can be tuned, but starting with 0.1 as per original weight
+            lambda_reg = 0.1
+            residual_term = lambda_reg * residual_cost
+        else:
+            # Fallback for no-policy case (standard quadratic cost)
+            residual_term = 0.1 * jnp.sum(jnp.square(control))
         
         return (
             10.0 * obj_target_cost
             + 5.0 * gripper_obj_cost
             + 1.0 * orientation_cost
-            + 0.1 * residual_cost
+            + residual_term
         )
     
     def terminal_cost(self, state: mjx.Data) -> jax.Array:
         """Terminal cost."""
         return self.running_cost(state, jnp.zeros(self.nu))
+    
+    def domain_randomize_model(self, rng: jax.Array) -> dict:
+        """Randomize mass and friction of the pushed object for domain randomization.
+        
+        This method is called by the CEM controller when num_randomizations > 1
+        to create multiple randomized models for robust planning.
+        
+        Args:
+            rng: JAX random key
+            
+        Returns:
+            Dictionary with randomized model parameters (body_mass, geom_friction).
+        """
+        from typing import Dict
+        
+        rng_mass, rng_friction = jax.random.split(rng)
+        
+        # Randomize box mass (0.5x to 2.0x of nominal)
+        mass_multiplier = jax.random.uniform(rng_mass, minval=0.5, maxval=2.0)
+        new_body_mass = self.model.body_mass.at[self._obj_body].set(
+            self.model.body_mass[self._obj_body] * mass_multiplier
+        )
+        
+        # Randomize friction (0.3x to 2.0x of nominal)
+        # geom_friction has shape (ngeom, 3) where [:, 0] is sliding friction
+        friction_multiplier = jax.random.uniform(rng_friction, minval=0.3, maxval=2.0)
+        new_geom_friction = self.model.geom_friction.at[self._obj_geom, 0].set(
+            self.model.geom_friction[self._obj_geom, 0] * friction_multiplier
+        )
+        
+        return {
+            "body_mass": new_body_mass,
+            "geom_friction": new_geom_friction,
+        }
+

@@ -306,7 +306,11 @@ def run_batched_experiment(
 
 
 def compute_metrics(data: ParallelRolloutData) -> dict:
-    """Compute metrics from parallel rollout data."""
+    """Compute metrics from parallel rollout data.
+    
+    Uses median and IQR (interquartile range) for robust statistics
+    on non-negative error metrics.
+    """
     times = np.array(data.time)
     dists = np.array(data.box_target_dist)  # (num_envs, num_steps)
     ori_errors = np.array(data.box_ori_error)  # (num_envs, num_steps)
@@ -318,7 +322,7 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
     
     num_envs = dists.shape[0]
     
-    # Position metrics
+    # Position metrics (per environment, then aggregate)
     mean_dist_per_env = np.mean(dists[:, mask], axis=1)
     final_dist_per_env = dists[:, -1]
     min_dist_per_env = np.min(dists[:, mask], axis=1)
@@ -328,8 +332,7 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
     final_ori_per_env = ori_errors[:, -1]
     
     # Combined error: position + orientation (weighted)
-    # Total error = position_error + 0.1 * ori_error_deg
-    ori_weight = 0.1 * (180 / np.pi)  # Convert rad to deg, then weight
+    ori_weight = 0.1 * (180 / np.pi)
     total_error_per_env = mean_dist_per_env + ori_weight * mean_ori_per_env
     
     # Time to reach within 5cm
@@ -341,27 +344,52 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
     
     time_to_5cm = np.array([time_to_threshold(dists[i]) for i in range(num_envs)])
     
+    # Helper for median + IQR stats
+    def median_iqr(arr):
+        median = float(np.median(arr))
+        q1 = float(np.percentile(arr, 25))
+        q3 = float(np.percentile(arr, 75))
+        return median, q1, q3
+    
+    # Position metrics with median/IQR
+    mean_dist_median, mean_dist_q1, mean_dist_q3 = median_iqr(mean_dist_per_env)
+    final_dist_median, final_dist_q1, final_dist_q3 = median_iqr(final_dist_per_env)
+    min_dist_median, min_dist_q1, min_dist_q3 = median_iqr(min_dist_per_env)
+    
+    # Orientation metrics with median/IQR (in degrees)
+    mean_ori_median, mean_ori_q1, mean_ori_q3 = median_iqr(mean_ori_per_env * 180 / np.pi)
+    final_ori_median, final_ori_q1, final_ori_q3 = median_iqr(final_ori_per_env * 180 / np.pi)
+    
+    # Total error with median/IQR
+    total_error_median, total_error_q1, total_error_q3 = median_iqr(total_error_per_env)
+    
     return {
-        # Position metrics
-        "mean_dist": float(np.mean(mean_dist_per_env)),
-        "mean_dist_std": float(np.std(mean_dist_per_env)),
-        "final_dist": float(np.mean(final_dist_per_env)),
-        "final_dist_std": float(np.std(final_dist_per_env)),
-        "min_dist": float(np.mean(min_dist_per_env)),
-        "min_dist_std": float(np.std(min_dist_per_env)),
+        # Position metrics (median + IQR)
+        "mean_dist": mean_dist_median,
+        "mean_dist_q1": mean_dist_q1,
+        "mean_dist_q3": mean_dist_q3,
+        "final_dist": final_dist_median,
+        "final_dist_q1": final_dist_q1,
+        "final_dist_q3": final_dist_q3,
+        "min_dist": min_dist_median,
+        "min_dist_q1": min_dist_q1,
+        "min_dist_q3": min_dist_q3,
         
-        # Orientation metrics (in degrees)
-        "mean_ori_error": float(np.mean(mean_ori_per_env) * 180 / np.pi),
-        "mean_ori_error_std": float(np.std(mean_ori_per_env) * 180 / np.pi),
-        "final_ori_error": float(np.mean(final_ori_per_env) * 180 / np.pi),
-        "final_ori_error_std": float(np.std(final_ori_per_env) * 180 / np.pi),
+        # Orientation metrics (in degrees, median + IQR)
+        "mean_ori_error": mean_ori_median,
+        "mean_ori_error_q1": mean_ori_q1,
+        "mean_ori_error_q3": mean_ori_q3,
+        "final_ori_error": final_ori_median,
+        "final_ori_error_q1": final_ori_q1,
+        "final_ori_error_q3": final_ori_q3,
         
-        # Combined metrics
-        "total_error": float(np.mean(total_error_per_env)),
-        "total_error_std": float(np.std(total_error_per_env)),
+        # Combined metrics (median + IQR)
+        "total_error": total_error_median,
+        "total_error_q1": total_error_q1,
+        "total_error_q3": total_error_q3,
         
         # Success metrics
-        "time_to_5cm": float(np.mean(time_to_5cm[time_to_5cm < float('inf')])) 
+        "time_to_5cm": float(np.median(time_to_5cm[time_to_5cm < float('inf')])) 
             if np.any(time_to_5cm < float('inf')) else float('inf'),
         "success_rate": float(np.mean(time_to_5cm < float('inf'))),
         
@@ -371,11 +399,14 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
 
 
 def plot_bar_comparison(results: dict, output_path: str):
-    """Create bar plot comparing metrics across approaches."""
+    """Create bar plot comparing metrics across approaches.
+    
+    Uses median with IQR (25th-75th percentile) for error bars.
+    """
     approaches = ["RL", "CEM", "Residual CEM"]
     colors = {"RL": "#F48B96", "CEM": "#9ACD32", "Residual CEM": "#90CCEB"}
     
-    # Metrics to plot
+    # Metrics to plot: (key, label, is_percentage)
     metrics = [
         ("final_dist", "Final Position Error (m)", False),
         ("final_ori_error", "Final Orientation Error (°)", False),
@@ -388,14 +419,21 @@ def plot_bar_comparison(results: dict, output_path: str):
     
     for ax, (metric, label, is_percentage) in zip(axes, metrics):
         values = [results[a]["metrics"][metric] for a in approaches]
-        stds = [results[a]["metrics"].get(f"{metric}_std", 0) for a in approaches]
         
         if is_percentage:
+            # Success rate doesn't have IQR, just show the value
             values = [v * 100 for v in values]
-            stds = [s * 100 for s in stds]
+            yerr = None
+        else:
+            # Get Q1 and Q3 for asymmetric error bars
+            q1s = [results[a]["metrics"].get(f"{metric}_q1", values[i]) for i, a in enumerate(approaches)]
+            q3s = [results[a]["metrics"].get(f"{metric}_q3", values[i]) for i, a in enumerate(approaches)]
+            # Error bars: lower = value - Q1, upper = Q3 - value
+            yerr = [[values[i] - q1s[i] for i in range(len(approaches))],
+                    [q3s[i] - values[i] for i in range(len(approaches))]]
         
         x = np.arange(len(approaches))
-        bars = ax.bar(x, values, yerr=stds, capsize=5,
+        bars = ax.bar(x, values, yerr=yerr, capsize=5,
                       color=[colors[a] for a in approaches],
                       edgecolor='black', linewidth=1.5)
         
@@ -404,18 +442,24 @@ def plot_bar_comparison(results: dict, output_path: str):
         ax.set_ylabel(label)
         ax.set_title(label)
         ax.grid(True, alpha=0.3, axis='y')
+        ax.set_ylim(0, None)  # Ensure y-axis starts at 0
         
         # Add value labels on bars
-        for bar, val, std in zip(bars, values, stds):
+        for i, (bar, val) in enumerate(zip(bars, values)):
             height = bar.get_height()
+            # Position label above the upper error bar
+            if yerr is not None:
+                label_y = height + yerr[1][i] + 0.01 * max(values)
+            else:
+                label_y = height + 2
             if is_percentage:
-                ax.text(bar.get_x() + bar.get_width()/2., height + std + 2,
+                ax.text(bar.get_x() + bar.get_width()/2., label_y,
                        f'{val:.1f}%', ha='center', va='bottom', fontsize=10)
             else:
-                ax.text(bar.get_x() + bar.get_width()/2., height + std + 0.01,
+                ax.text(bar.get_x() + bar.get_width()/2., label_y,
                        f'{val:.3f}', ha='center', va='bottom', fontsize=10)
     
-    plt.suptitle(f"Franka Push Comparison (n={results['RL']['metrics']['num_evals']} evals)", 
+    plt.suptitle(f"Franka Push Comparison - Median + IQR (n={results['RL']['metrics']['num_evals']} evals)", 
                  fontsize=16, fontweight='bold')
     plt.tight_layout()
     
@@ -431,6 +475,8 @@ def plot_bar_comparison(results: dict, output_path: str):
 def generate_latex_table(results: dict, output_path: str):
     """Generate a LaTeX formatted table of all metrics.
     
+    Uses median with IQR (Q1-Q3) instead of mean ± std.
+    
     Args:
         results: Dictionary with results for each approach
         output_path: Path to save the .tex file
@@ -438,11 +484,11 @@ def generate_latex_table(results: dict, output_path: str):
     # Order: RL, CEM, Residual CEM
     approaches = ["RL", "CEM", "Residual CEM"]
     
-    def fmt(val, std=None, precision=4):
+    def fmt(val, q1=None, q3=None, precision=4):
         if val == float('inf'):
             return "N/A"
-        if std is not None and std > 0:
-            return f"${val:.{precision}f} \\pm {std:.{precision}f}$"
+        if q1 is not None and q3 is not None:
+            return f"${val:.{precision}f}$ ({q1:.{precision}f}-{q3:.{precision}f})"
         return f"${val:.{precision}f}$"
     
     def fmt_pct(val):
@@ -451,7 +497,7 @@ def generate_latex_table(results: dict, output_path: str):
     lines = [
         r"\begin{table}[htbp]",
         r"\centering",
-        r"\caption{Franka Push Task Performance Comparison}",
+        r"\caption{Franka Push Task Performance Comparison (Median with IQR)}",
         r"\label{tab:franka_push_results}",
         r"\begin{tabular}{lccc}",
         r"\toprule",
@@ -464,7 +510,9 @@ def generate_latex_table(results: dict, output_path: str):
     for metric, label in [("mean_dist", "Mean Distance (m)"), 
                           ("final_dist", "Final Distance (m)"),
                           ("min_dist", "Min Distance (m)")]:
-        vals = [fmt(results[a]["metrics"][metric], results[a]["metrics"].get(f"{metric}_std")) 
+        vals = [fmt(results[a]["metrics"][metric], 
+                   results[a]["metrics"].get(f"{metric}_q1"),
+                   results[a]["metrics"].get(f"{metric}_q3")) 
                 for a in approaches]
         lines.append(f"{label} & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
     
@@ -474,7 +522,9 @@ def generate_latex_table(results: dict, output_path: str):
     lines.append(r"\multicolumn{4}{l}{\textit{Orientation Error}} \\")
     for metric, label in [("mean_ori_error", "Mean Orientation ($^\\circ$)"),
                           ("final_ori_error", "Final Orientation ($^\\circ$)")]:
-        vals = [fmt(results[a]["metrics"][metric], results[a]["metrics"].get(f"{metric}_std"), precision=2) 
+        vals = [fmt(results[a]["metrics"][metric], 
+                   results[a]["metrics"].get(f"{metric}_q1"),
+                   results[a]["metrics"].get(f"{metric}_q3"), precision=2) 
                 for a in approaches]
         lines.append(f"{label} & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
     
@@ -483,7 +533,9 @@ def generate_latex_table(results: dict, output_path: str):
     # Combined and success metrics
     lines.append(r"\multicolumn{4}{l}{\textit{Summary Metrics}} \\")
     
-    vals = [fmt(results[a]["metrics"]["total_error"], results[a]["metrics"].get("total_error_std")) 
+    vals = [fmt(results[a]["metrics"]["total_error"], 
+               results[a]["metrics"].get("total_error_q1"),
+               results[a]["metrics"].get("total_error_q3")) 
             for a in approaches]
     lines.append(f"Total Error & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
     
@@ -713,22 +765,29 @@ def main():
     x = np.arange(len(approaches))
     
     final_dists = [results[a]["metrics"]["final_dist"] for a in approaches]
-    final_dist_stds = [results[a]["metrics"]["final_dist_std"] for a in approaches]
+    final_dist_q1 = [results[a]["metrics"]["final_dist_q1"] for a in approaches]
+    final_dist_q3 = [results[a]["metrics"]["final_dist_q3"] for a in approaches]
     
-    bars = ax.bar(x, final_dists, yerr=final_dist_stds, capsize=5,
+    # Asymmetric error bars: [lower, upper] where lower = value - Q1, upper = Q3 - value
+    yerr = [[final_dists[i] - final_dist_q1[i] for i in range(len(approaches))],
+            [final_dist_q3[i] - final_dists[i] for i in range(len(approaches))]]
+    
+    bars = ax.bar(x, final_dists, yerr=yerr, capsize=5,
                   color=[colors[a] for a in approaches], edgecolor='black', linewidth=1.5)
     
     ax.axhline(y=0.05, color='g', linestyle='--', label='Success (5cm)', alpha=0.7)
     ax.set_xticks(x)
     ax.set_xticklabels(approaches)
     ax.set_ylabel("Final Position Error (m)")
-    ax.set_title(f"Final Error Comparison (n={num_evals})")
+    ax.set_title(f"Final Error Comparison - Median + IQR (n={num_evals})")
     ax.legend(loc='best')
     ax.grid(True, alpha=0.3, axis='y')
+    ax.set_ylim(0, None)
     
-    # Add value labels
-    for bar, val, std in zip(bars, final_dists, final_dist_stds):
-        ax.text(bar.get_x() + bar.get_width()/2., bar.get_height() + std + 0.005,
+    # Add value labels above upper error bar
+    for i, (bar, val) in enumerate(zip(bars, final_dists)):
+        label_y = val + yerr[1][i] + 0.005
+        ax.text(bar.get_x() + bar.get_width()/2., label_y,
                f'{val:.3f}', ha='center', va='bottom', fontsize=11)
     
     plt.tight_layout()

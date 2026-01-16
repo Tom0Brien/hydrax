@@ -50,7 +50,6 @@ class iCEM(SamplingBasedController):
     3. Shifted elites: warm-start next timestep with shifted trajectories
     4. Best action execution: execute best action, not mean
     5. Momentum smoothing: smooth distribution updates with α
-    6. Mean injection: add mean as sample in last iteration
 
     Reference: https://arxiv.org/abs/2008.06389
     """
@@ -65,11 +64,8 @@ class iCEM(SamplingBasedController):
         alpha: float = 0.1,
         noise_beta: float = 2.0,
         fraction_elites_reused: float = 0.3,
-        population_decay_factor: float = 2.0,
         shift_elites: bool = True,
-        keep_elites: bool = False,
         use_best_action: bool = True,
-        add_mean_sample: bool = True,
         num_randomizations: int = 1,
         risk_strategy: RiskStrategy = None,
         seed: int = 0,
@@ -90,11 +86,8 @@ class iCEM(SamplingBasedController):
             noise_beta: Colored noise exponent. Higher values create smoother trajectories.
                        Typical values: 0.25 (high-freq), 2.0 (low-freq), 3.5 (very smooth).
             fraction_elites_reused: Fraction of elites to reuse across iterations (0.0-1.0).
-            population_decay_factor: Factor to decay population each iteration (e.g., 2.0).
             shift_elites: Whether to shift elite trajectories forward for warm-starting.
-            keep_elites: Whether to keep elites across iterations within a timestep.
             use_best_action: Execute best action (True) or mean action (False).
-            add_mean_sample: Add mean to samples at the last iteration.
             num_randomizations: The number of domain randomizations to use.
             risk_strategy: How to combine costs from different randomizations.
             seed: The random seed for domain randomization.
@@ -127,11 +120,8 @@ class iCEM(SamplingBasedController):
         self.alpha = alpha
         self.noise_beta = noise_beta
         self.fraction_elites_reused = fraction_elites_reused
-        self.population_decay_factor = population_decay_factor
         self.shift_elites = shift_elites
-        self.keep_elites = keep_elites
         self.use_best_action = use_best_action
-        self.add_mean_sample = add_mean_sample
 
         # Calculate how many elites to keep for warm-starting
         self.num_elites_to_keep = int(num_elites * fraction_elites_reused)
@@ -319,12 +309,8 @@ class iCEM(SamplingBasedController):
             is_first = iteration == 0
             knots, _params = self.sample_knots(_params, is_first_iter=is_first)
 
-            # Interpolate to get controls
-            tk = _params.tk
-            tq = jnp.linspace(0.0, self.plan_horizon - self.dt, self.ctrl_steps)
-            controls = self.interp_func(tq, tk, knots)
-
             # Roll out trajectories and compute costs
+            tk = _params.tk
             rollouts = self.rollout_with_randomizations(
                 state, tk, knots, _params.rng
             )
