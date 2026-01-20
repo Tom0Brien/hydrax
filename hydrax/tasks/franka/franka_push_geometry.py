@@ -127,7 +127,7 @@ class FrankaPushGeometry(Task):
         self._use_rl_policy = use_rl_policy
         
         # Load the XML model using mujoco_playground's asset loading
-        xml_path = _XMLS_PATH / GEOMETRY_XMLS[geometry]
+        xml_path = self._get_xml_path(geometry)
         if not xml_path.exists():
             raise FileNotFoundError(f"XML file not found: {xml_path}")
         
@@ -171,6 +171,13 @@ class FrankaPushGeometry(Task):
         # Set control frequency to 50Hz
         self.ctrl_dt = 0.02
         self.n_substeps = max(1, round(self.ctrl_dt / self.dt))
+    
+    def _get_xml_path(self, geometry: str) -> Path:
+        """Get the XML path for the scene.
+        
+        Override in subclasses to use different scenes (e.g., constrained).
+        """
+        return _XMLS_PATH / GEOMETRY_XMLS[geometry]
     
     def _load_policy(self):
         """Load the cube-trained RL policy for residual control."""

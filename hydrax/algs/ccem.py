@@ -10,21 +10,29 @@ from hydrax.task_base import Task
 
 
 @dataclass
-class CEMParams(SamplingParams):
-    """Policy parameters for the cross-entropy method.
+class CCEMParams(SamplingParams):
+    """Policy parameters for the constrained cross-entropy method.
 
     Attributes:
         tk: The knot times of the control spline.
         mean: The mean of the control spline knot distribution, μ = [u₀, ...].
         rng: The pseudo-random number generator key.
+        opt_iteration: The current optimization iteration number.
         cov: The (diagonal) covariance of the control distribution.
     """
 
     cov: jax.Array
 
 
-class CEM(SamplingBasedController):
-    """Cross-entropy method with diagonal covariance."""
+class CCEM(SamplingBasedController):
+    """Constrained Cross-entropy method with diagonal covariance.
+    
+    This algorithm extends CEM to handle constraints by prioritizing feasible
+    solutions. When selecting elite samples, it:
+    1. First selects all feasible samples (constraint_cost <= 0)
+    2. If not enough feasible samples, fills with least-violating infeasible ones
+    3. Updates the distribution from the elite samples
+    """
 
     def __init__(
         self,
@@ -40,7 +48,6 @@ class CEM(SamplingBasedController):
         plan_horizon: float = 1.0,
         spline_type: Literal["zero", "linear", "cubic"] = "zero",
         num_knots: int = 4,
-        iterations: int = 1,
     ) -> None:
         """Initialize the controller.
 
@@ -50,8 +57,8 @@ class CEM(SamplingBasedController):
             num_elites: The number of elite samples to keep at each iteration.
             sigma_start: The initial standard deviation for the controls.
             sigma_min: The minimum standard deviation for the controls.
-            explore_fraction: Fraction of samples to keep at sigma_start.
             num_randomizations: The number of domain randomizations to use.
+            explore_fraction: Fraction of samples to keep at sigma_start.
             risk_strategy: How to combining costs from different randomizations.
                            Defaults to average cost.
             seed: The random seed for domain randomization.
@@ -59,12 +66,10 @@ class CEM(SamplingBasedController):
             spline_type: The type of spline used for control interpolation.
                          Defaults to "zero" (zero-order hold).
             num_knots: The number of knots in the control spline.
-            iterations: The number of optimization iterations to perform.
         """
         if not 0 <= explore_fraction <= 1:
             raise ValueError(
-                f"explore_fraction must be between 0 and 1, got "
-                f"{explore_fraction}"
+                f"explore_fraction must be between 0 and 1, got {explore_fraction}"
             )
         super().__init__(
             task,
@@ -74,7 +79,6 @@ class CEM(SamplingBasedController):
             plan_horizon=plan_horizon,
             spline_type=spline_type,
             num_knots=num_knots,
-            iterations=iterations,
         )
         self.num_samples = num_samples
         self.sigma_min = sigma_min
@@ -84,17 +88,24 @@ class CEM(SamplingBasedController):
 
     def init_params(
         self, initial_knots: jax.Array = None, seed: int = 0
-    ) -> CEMParams:
+    ) -> CCEMParams:
         """Initialize the policy parameters."""
         _params = super().init_params(initial_knots, seed)
         cov = jnp.full_like(_params.mean, self.sigma_start)
-        return CEMParams(
-            tk=_params.tk, mean=_params.mean, rng=_params.rng,
-            opt_iteration=_params.opt_iteration, cov=cov
+        return CCEMParams(
+            tk=_params.tk,
+            opt_iteration=_params.opt_iteration,
+            mean=_params.mean,
+            cov=cov,
+            rng=_params.rng,
         )
 
-    def sample_knots(self, params: CEMParams) -> Tuple[jax.Array, CEMParams]:
-        """Sample a control sequence."""
+    def sample_knots(self, params: CCEMParams) -> Tuple[jax.Array, CCEMParams]:
+        """Sample a control sequence.
+
+        A fraction of samples (determined by explore_fraction) will use the initial
+        high variance for better exploration, while the rest use the current covariance.
+        """
         rng, sample_rng, explore_rng = jax.random.split(params.rng, 3)
 
         # Pre-compute shapes for both main and exploration samples
@@ -129,18 +140,38 @@ class CEM(SamplingBasedController):
         return controls, params.replace(rng=rng)
 
     def update_params(
-        self, params: CEMParams, rollouts: Trajectory
-    ) -> CEMParams:
-        """Update the mean with an exponentially weighted average."""
-        costs = jnp.sum(rollouts.costs, axis=1)  # sum over time steps
+        self, params: CCEMParams, rollouts: Trajectory
+    ) -> CCEMParams:
+        """Update the distribution parameters based on elite samples.
 
-        # Sort the costs and get the indices of the elites.
-        indices = jnp.argsort(costs)
-        elites = indices[: self.num_elites]
-
-        # The new proposal distribution is a Gaussian fit to the elites.
-        mean = jnp.mean(rollouts.knots[elites], axis=0)
-        cov = jnp.maximum(
-            jnp.std(rollouts.knots[elites], axis=0), self.sigma_min
+        Selects elite samples by prioritizing feasible solutions (constraint_cost <= 0).
+        If there are enough feasible samples, only those are used. Otherwise, all feasible
+        samples are selected plus the least-violating infeasible samples.
+        """
+        # Sum costs across time steps
+        costs = jnp.sum(rollouts.costs, axis=1)
+        constraint_costs = jnp.sum(
+            jnp.maximum(rollouts.constraint_costs, 0), axis=1
         )
+
+        # Identify feasible samples
+        is_feasible = constraint_costs <= 0
+
+        # Create a combined score for sorting, prioritizing constraint feasibility over cost
+        # For feasible samples: use their cost
+        # For infeasible samples: use constraint violation, offset by max cost + 1
+        combined_score = jnp.where(
+            is_feasible,
+            costs,
+            constraint_costs + jnp.max(costs) + 1.0,
+        )
+
+        # Sort all samples in one pass and take top elite_count
+        elite_indices = jnp.argsort(combined_score)[: self.num_elites]
+
+        # Compute new distribution parameters from elites
+        elite_samples = rollouts.knots[elite_indices]
+        mean = jnp.mean(elite_samples, axis=0)
+        cov = jnp.maximum(jnp.std(elite_samples, axis=0), self.sigma_min)
+
         return params.replace(mean=mean, cov=cov)

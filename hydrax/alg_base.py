@@ -23,12 +23,14 @@ class Trajectory:
         controls: Control actions of shape (num_rollouts, H, nu).
         knots: Control spline knots of shape (num_rollouts, num_knots, nu).
         costs: Costs of shape (num_rollouts, H+1).
+        constraint_costs: Constraint costs of shape (num_rollouts, H+1).
         trace_sites: Positions of trace sites of shape (num_rollouts, H+1, 3).
     """
 
     controls: jax.Array
     knots: jax.Array
     costs: jax.Array
+    constraint_costs: jax.Array
     trace_sites: jax.Array
 
     def __len__(self):
@@ -44,11 +46,13 @@ class SamplingParams:
         tk: The knot times of the control spline.
         mean: The mean of the control spline knot distribution, μ = [u₀, ...].
         rng: The pseudo-random number generator key.
+        opt_iteration: The current optimization iteration number.
     """
 
     tk: jax.Array
     mean: jax.Array
     rng: jax.Array
+    opt_iteration: int
 
 
 class SamplingBasedController(ABC):
@@ -142,7 +146,7 @@ class SamplingBasedController(ABC):
             jnp.linspace(0.0, self.plan_horizon, self.num_knots) + state.time
         )
         new_mean = self.interp_func(new_tk, tk, params.mean[None, ...])[0]
-        params = params.replace(tk=new_tk, mean=new_mean)
+        params = params.replace(tk=new_tk, mean=new_mean, opt_iteration=0)
 
         def _optimize_scan_body(params: Any, _: Any):
             # Sample random control sequences from spline knots
@@ -161,6 +165,9 @@ class SamplingBasedController(ABC):
 
             # Update the policy parameters based on the combined costs
             params = self.update_params(params, rollouts)
+
+            # Increment the iteration counter
+            params = params.replace(opt_iteration=params.opt_iteration + 1)
 
             return params, rollouts
 
@@ -217,11 +224,16 @@ class SamplingBasedController(ABC):
         # Combine the costs from different domain randomizations using the
         # specified risk strategy.
         costs = self.risk_strategy.combine_costs(rollouts.costs)
+        constraint_costs = self.risk_strategy.combine_costs(rollouts.constraint_costs)
         controls = rollouts.controls[0]  # identical over randomizations
         knots = rollouts.knots[0]  # identical over randomizations
         trace_sites = rollouts.trace_sites[0]  # visualization only, take 1st
         return rollouts.replace(
-            costs=costs, controls=controls, knots=knots, trace_sites=trace_sites
+            costs=costs,
+            constraint_costs=constraint_costs,
+            controls=controls,
+            knots=knots,
+            trace_sites=trace_sites,
         )
 
     @partial(jax.vmap, in_axes=(None, None, None, 0, 0))
@@ -247,27 +259,33 @@ class SamplingBasedController(ABC):
 
         def _scan_fn(
             x: mjx.Data, u: jax.Array
-        ) -> Tuple[mjx.Data, Tuple[mjx.Data, jax.Array, jax.Array]]:
+        ) -> Tuple[mjx.Data, Tuple[mjx.Data, jax.Array, jax.Array, jax.Array]]:
             """Compute the cost and observation, then advance the state."""
             x = self.task.apply_control(x, u)
             x = self.task.step(model, x)  # step model + compute site positions
             cost = self.dt * self.task.running_cost(x, u)
+            constraint_cost = self.dt * self.task.constraint_cost(x, u)
             sites = self.task.get_trace_sites(x)
-            return x, (x, cost, sites)
+            return x, (x, cost, constraint_cost, sites)
 
-        final_state, (states, costs, trace_sites) = jax.lax.scan(
+        final_state, (states, costs, constraint_costs, trace_sites) = jax.lax.scan(
             _scan_fn, state, controls
         )
         final_cost = self.task.terminal_cost(final_state)
+        final_constraint_cost = self.task.constraint_cost(
+            final_state, jnp.zeros_like(controls[0])
+        )
         final_trace_sites = self.task.get_trace_sites(final_state)
 
         costs = jnp.append(costs, final_cost)
+        constraint_costs = jnp.append(constraint_costs, final_constraint_cost)
         trace_sites = jnp.append(trace_sites, final_trace_sites[None], axis=0)
 
         return states, Trajectory(
             controls=controls,
             knots=knots,
             costs=costs,
+            constraint_costs=constraint_costs,
             trace_sites=trace_sites,
         )
 
@@ -293,7 +311,7 @@ class SamplingBasedController(ABC):
             f"Initial knots must have shape (num_knots, nu), got {mean.shape}"
         )
         tk = jnp.linspace(0.0, self.plan_horizon, self.num_knots)
-        return SamplingParams(tk=tk, mean=mean, rng=rng)
+        return SamplingParams(tk=tk, mean=mean, rng=rng, opt_iteration=0)
 
     @abstractmethod
     def sample_knots(self, params: Any) -> Tuple[jax.Array, Any]:

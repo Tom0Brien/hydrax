@@ -1,19 +1,19 @@
 \begin{table}[htbp]
 \centering
-\caption{Robustness Experiment Results (Final Distance in m)}
+\caption{Robustness Experiment Results (Final Distance in m, Median with IQR)}
 \label{tab:robustness_results}
 \begin{tabular}{lccc}
 \toprule
-Condition & RL & CEM & Residual CEM \\
+Condition & Policy & CEM & Policy-guided CEM \\
 \midrule
-cube\_nominal & $0.045 \pm 0.042$ & $0.030 \pm 0.024$ & $0.025 \pm 0.031$ \\
-cube\_heavy & $0.054 \pm 0.047$ & $0.041 \pm 0.078$ & $0.017 \pm 0.010$ \\
-cube\_slippery & $0.129 \pm 0.135$ & $0.021 \pm 0.008$ & $0.018 \pm 0.010$ \\
-cube\_heavy\_slippery & $0.117 \pm 0.090$ & $0.033 \pm 0.029$ & $0.014 \pm 0.002$ \\
-square\_nominal & $0.043 \pm 0.027$ & $0.014 \pm 0.011$ & $0.016 \pm 0.003$ \\
-tblock\_nominal & $0.042 \pm 0.044$ & $0.018 \pm 0.016$ & $0.029 \pm 0.025$ \\
-square\_heavy & $0.051 \pm 0.027$ & $0.020 \pm 0.016$ & $0.019 \pm 0.004$ \\
-tblock\_slippery & $0.053 \pm 0.045$ & $0.023 \pm 0.025$ & $0.029 \pm 0.027$ \\
+Rectangular Prism & $0.032$ (0.026-0.063) & $0.019$ (0.011-0.084) & $0.017$ (0.009-0.024) \\
+Cube & $0.055$ (0.024-0.073) & $0.012$ (0.009-0.012) & $0.023$ (0.009-0.030) \\
+T-Block & $0.039$ (0.023-0.090) & $0.013$ (0.009-0.020) & $0.024$ (0.013-0.028) \\
+\midrule
+\multicolumn{4}{l}{\textit{Success Rate (\%, dist<5cm, ori<15°)}} \\
+Rectangular Prism & $62\%$ & $62\%$ & $81\%$ \\
+Cube & $44\%$ & $94\%$ & $100\%$ \\
+T-Block & $62\%$ & $88\%$ & $94\%$ \\
 \bottomrule
 \end{tabular}
 \end{table}

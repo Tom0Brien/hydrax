@@ -4,9 +4,9 @@ This script runs multiple environments in parallel using JAX vmap/scan,
 leveraging MJX for GPU-accelerated simulation.
 
 Compares:
-1. Baseline RL policy (zero residuals)
-2. Residual CEM (CEM optimizing residuals around RL policy)
-3. CEM Only (no RL policy)
+1. Baseline policy (zero residuals)
+2. Policy-guided CEM (CEM optimizing residuals around policy)
+3. CEM Only (no policy)
 
 Usage:
     python franka_push_experiment_parallel.py --num_evals 16 --num_envs 4 --duration 5.0
@@ -363,6 +363,13 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
     # Total error with median/IQR
     total_error_median, total_error_q1, total_error_q3 = median_iqr(total_error_per_env)
     
+    # Success thresholds
+    pos_threshold = 0.05  # 5cm position error
+    ori_threshold = 15.0 * np.pi / 180  # 15 degrees orientation error
+    
+    # Success requires BOTH position AND orientation criteria
+    success_per_env = (final_dist_per_env < pos_threshold) & (final_ori_per_env < ori_threshold)
+    
     return {
         # Position metrics (median + IQR)
         "mean_dist": mean_dist_median,
@@ -391,7 +398,7 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
         # Success metrics
         "time_to_5cm": float(np.median(time_to_5cm[time_to_5cm < float('inf')])) 
             if np.any(time_to_5cm < float('inf')) else float('inf'),
-        "success_rate": float(np.mean(time_to_5cm < float('inf'))),
+        "success_rate": float(np.mean(success_per_env)),
         
         # Count
         "num_evals": num_envs,
@@ -403,8 +410,8 @@ def plot_bar_comparison(results: dict, output_path: str):
     
     Uses median with IQR (25th-75th percentile) for error bars.
     """
-    approaches = ["RL", "CEM", "Residual CEM"]
-    colors = {"RL": "#F48B96", "CEM": "#9ACD32", "Residual CEM": "#90CCEB"}
+    approaches = ["Policy", "CEM", "Policy-guided CEM"]
+    colors = {"Policy": "#F48B96", "CEM": "#9ACD32", "Policy-guided CEM": "#90CCEB"}
     
     # Metrics to plot: (key, label, is_percentage)
     metrics = [
@@ -459,7 +466,7 @@ def plot_bar_comparison(results: dict, output_path: str):
                 ax.text(bar.get_x() + bar.get_width()/2., label_y,
                        f'{val:.3f}', ha='center', va='bottom', fontsize=10)
     
-    plt.suptitle(f"Franka Push Comparison - Median + IQR (n={results['RL']['metrics']['num_evals']} evals)", 
+    plt.suptitle(f"Franka Push Comparison - Median + IQR (n={results['Policy']['metrics']['num_evals']} evals)", 
                  fontsize=16, fontweight='bold')
     plt.tight_layout()
     
@@ -482,7 +489,7 @@ def generate_latex_table(results: dict, output_path: str):
         output_path: Path to save the .tex file
     """
     # Order: RL, CEM, Residual CEM
-    approaches = ["RL", "CEM", "Residual CEM"]
+    approaches = ["Policy", "CEM", "Policy-guided CEM"]
     
     def fmt(val, q1=None, q3=None, precision=4):
         if val == float('inf'):
@@ -501,7 +508,7 @@ def generate_latex_table(results: dict, output_path: str):
         r"\label{tab:franka_push_results}",
         r"\begin{tabular}{lccc}",
         r"\toprule",
-        r"Metric & RL & CEM & Residual CEM \\",
+        r"Metric & Policy & CEM & Policy-guided CEM \\",
         r"\midrule",
     ]
     
@@ -591,7 +598,7 @@ def main():
     
     # Scenario 1: RL Policy Alone
     print("\n" + "="*50)
-    print("Scenario 1: RL Policy Alone")
+    print("Scenario 1: Policy Alone")
     print("="*50)
     task1 = FrankaPushGeometry(geometry="cube", use_rl_policy=True)
     data1 = run_batched_experiment(
@@ -601,11 +608,11 @@ def main():
         base_seed=args.seed, 
         duration=args.duration
     )
-    results["RL"] = {"data": data1, "metrics": compute_metrics(data1)}
+    results["Policy"] = {"data": data1, "metrics": compute_metrics(data1)}
     
     # Scenario 2: CEM Only (run second for ordering)
     print("\n" + "="*50)
-    print("Scenario 2: CEM Only (no RL policy)")
+    print("Scenario 2: CEM Only (no policy)")
     print("="*50)
     task2 = FrankaPushGeometry(geometry="cube", use_rl_policy=False)
     ctrl2 = CEM(
@@ -630,7 +637,7 @@ def main():
     
     # Scenario 3: Residual CEM
     print("\n" + "="*50)
-    print("Scenario 3: Residual CEM")
+    print("Scenario 3: Policy-guided CEM")
     print("="*50)
     task3 = FrankaPushGeometry(geometry="cube", use_rl_policy=True)
     ctrl3 = CEM(
@@ -651,14 +658,14 @@ def main():
         base_seed=args.seed, 
         duration=args.duration
     )
-    results["Residual CEM"] = {"data": data3, "metrics": compute_metrics(data3)}
+    results["Policy-guided CEM"] = {"data": data3, "metrics": compute_metrics(data3)}
     
-    # Order for display: RL, CEM, Residual CEM
-    approaches = ["RL", "CEM", "Residual CEM"]
+    # Order for display: Policy, CEM, Policy-guided CEM
+    approaches = ["Policy", "CEM", "Policy-guided CEM"]
     
     # Print metrics table
     print("\n" + "="*100)
-    print(f"{'Metric':<25} | {'RL':<22} | {'CEM':<22} | {'Residual CEM':<22}")
+    print(f"{'Metric':<25} | {'Policy':<22} | {'CEM':<22} | {'Policy-guided CEM':<22}")
     print("-" * 100)
     
     def fmt_metric(val, std=None):
@@ -709,7 +716,7 @@ def main():
         'lines.linewidth': 2.0,
     })
     
-    colors = {"RL": "#F48B96", "CEM": "#9ACD32", "Residual CEM": "#90CCEB"}
+    colors = {"Policy": "#F48B96", "CEM": "#9ACD32", "Policy-guided CEM": "#90CCEB"}
     
     # Plot 1: Position error over time (individual figure)
     fig1, ax = plt.subplots(figsize=(10, 6))

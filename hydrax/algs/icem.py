@@ -140,8 +140,9 @@ class iCEM(SamplingBasedController):
         return iCEMParams(
             tk=_params.tk,
             mean=_params.mean,
-            cov=cov,
             rng=_params.rng,
+            opt_iteration=_params.opt_iteration,
+            cov=cov,
             elite_knots=elite_knots,
             best_knots=best_knots,
         )

@@ -143,12 +143,12 @@ def get_geometry_perturbations() -> List[PerturbationConfig]:
     physical parameters (mass, friction) at nominal values.
     """
     return [
-        # Original trained geometry
-        PerturbationConfig(name="cube", mass_scale=1.0, friction_scale=1.0, geometry="cube"),
+        # Original trained geometry (cube model = rectangular prism shape)
+        PerturbationConfig(name="Rectangular Prism", mass_scale=1.0, friction_scale=1.0, geometry="cube"),
         
         # Alternative geometries (tests shape generalization)
-        PerturbationConfig(name="square", mass_scale=1.0, friction_scale=1.0, geometry="square"),
-        PerturbationConfig(name="tblock", mass_scale=1.0, friction_scale=1.0, geometry="tblock"),
+        PerturbationConfig(name="Cube", mass_scale=1.0, friction_scale=1.0, geometry="square"),
+        PerturbationConfig(name="T-Block", mass_scale=1.0, friction_scale=1.0, geometry="tblock"),
     ]
 
 

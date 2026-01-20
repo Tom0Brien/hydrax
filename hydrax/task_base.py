@@ -106,6 +106,24 @@ class Task(ABC):
         """
         pass
 
+    def constraint_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
+        """The constraint cost c(xₜ, uₜ) for constrained optimization.
+
+        Override in subclasses to implement constraints. The constraint is
+        satisfied when cost <= 0, and violated when cost > 0.
+
+        Used by constrained algorithms like CCEM to prioritize feasible solutions.
+
+        Args:
+            state: The current state xₜ.
+            control: The control action uₜ.
+
+        Returns:
+            The constraint cost (scalar). Positive values indicate violation.
+        """
+        # By default, no constraints (always feasible)
+        return jnp.zeros(())
+
     def get_trace_sites(self, state: mjx.Data) -> jax.Array:
         """Get the positions of the trace sites at the current time step.
 

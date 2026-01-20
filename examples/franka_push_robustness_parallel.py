@@ -6,9 +6,9 @@ under variations in object properties (mass, friction, geometry).
 Uses JAX vmap/scan for GPU-accelerated parallel simulation within each condition.
 
 Compares:
-1. RL: Pre-trained policy alone (zero residuals)
-2. CEM: CEM controller without RL policy
-3. Residual CEM: CEM optimizing residuals around RL policy
+1. Policy: Pre-trained policy alone (zero residuals)
+2. CEM: CEM controller without policy
+3. Policy-guided CEM: CEM optimizing residuals around policy
 
 Usage:
     python franka_push_robustness_parallel.py --mode quick --num_envs 4 --num_evals 8
@@ -278,7 +278,7 @@ def run_batched_experiment(
 
 
 def compute_metrics(data: ParallelRolloutData) -> dict:
-    """Compute metrics from parallel rollout data."""
+    """Compute metrics from parallel rollout data using median + IQR."""
     times = np.array(data.time)
     dists = np.array(data.box_target_dist)
     ori_errors = np.array(data.box_ori_error)
@@ -293,17 +293,32 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
     min_dist_per_env = np.min(dists[:, mask], axis=1)
     final_ori_per_env = ori_errors[:, -1]
     
-    success_threshold = 0.05
-    success_per_env = np.min(dists, axis=1) < success_threshold
+    # Success thresholds
+    pos_threshold = 0.05  # 5cm position error
+    ori_threshold = 15.0 * np.pi / 180  # 15 degrees orientation error
+    
+    # Success requires BOTH position AND orientation criteria
+    success_per_env = (final_dist_per_env < pos_threshold) & (final_ori_per_env < ori_threshold)
+    
+    def median_iqr(arr):
+        return float(np.median(arr)), float(np.percentile(arr, 25)), float(np.percentile(arr, 75))
+    
+    final_dist_median, final_dist_q1, final_dist_q3 = median_iqr(final_dist_per_env)
+    min_dist_median, min_dist_q1, min_dist_q3 = median_iqr(min_dist_per_env)
+    final_ori_median, final_ori_q1, final_ori_q3 = median_iqr(final_ori_per_env * 180 / np.pi)
     
     return {
-        "mean_dist": np.mean(np.mean(dists[:, mask], axis=1)),
-        "final_dist": np.mean(final_dist_per_env),
-        "final_dist_std": np.std(final_dist_per_env),
-        "min_dist": np.mean(min_dist_per_env),
-        "final_ori": np.mean(final_ori_per_env) * 180 / np.pi,
-        "final_ori_std": np.std(final_ori_per_env) * 180 / np.pi,
-        "success_rate": np.mean(success_per_env),
+        "final_dist": final_dist_median,
+        "final_dist_q1": final_dist_q1,
+        "final_dist_q3": final_dist_q3,
+        "min_dist": min_dist_median,
+        "min_dist_q1": min_dist_q1,
+        "min_dist_q3": min_dist_q3,
+        "final_ori": final_ori_median,
+        "final_ori_q1": final_ori_q1,
+        "final_ori_q3": final_ori_q3,
+        "success_rate": float(np.mean(success_per_env)),
+        "num_evals": num_envs,
     }
 
 
@@ -330,30 +345,29 @@ def run_condition_experiment(
     jax.clear_caches()
     
     geometry = getattr(perturbation, 'geometry', 'cube')
-    condition_name = f"{geometry}_{perturbation.name}"
+    # Use perturbation name directly if it's descriptive, otherwise add geometry prefix
+    condition_name = perturbation.name
     
     print(f"\n{'='*60}")
-    print(f"Condition: {condition_name}")
+    print(f"Condition: {condition_name} (geometry={geometry})")
     print(f"  Mass: {perturbation.mass_scale}x, Friction: {perturbation.friction_scale}x")
     print(f"  Running {num_evals} evals in batches of {num_envs}")
     print('='*60)
     
-    modes = ["RL", "CEM", "Residual CEM"]
+    modes = ["Policy", "CEM", "Policy-guided CEM"]
     results = {}
     
     for mode in modes:
         print(f"\n  {mode}...", end=" ", flush=True)
         start = time.time()
         
-        # Create fresh task for this mode
-        use_rl = mode in ["RL", "Residual CEM"]
+        use_rl = mode in ["Policy", "Policy-guided CEM"]
         task = FrankaPushGeometry(geometry=geometry, use_rl_policy=use_rl)
         
         # Apply perturbation (modifies task.mj_model and task.model)
         apply_perturbation(task.mj_model, perturbation, task=task)
         
-        # Create controller if needed
-        use_cem = mode in ["CEM", "Residual CEM"]
+        use_cem = mode in ["CEM", "Policy-guided CEM"]
         if use_cem:
             controller = CEM(
                 task=task,
@@ -403,8 +417,8 @@ def run_robustness_experiment(
     all_results = {}
     
     for perturbation in perturbations:
-        geometry = getattr(perturbation, 'geometry', 'cube')
-        condition_name = f"{geometry}_{perturbation.name}"
+        # Use perturbation name directly
+        condition_name = perturbation.name
         
         condition_results = run_condition_experiment(
             perturbation=perturbation,
@@ -422,15 +436,15 @@ def run_robustness_experiment(
 def print_summary_table(results: Dict):
     """Print formatted summary table."""
     conditions = list(results.keys())
-    modes = ["RL", "CEM", "Residual CEM"]
+    modes = ["Policy", "CEM", "Policy-guided CEM"]
     
     print("\n" + "="*110)
-    print("SUMMARY: Final Distance (m) ± Std")
+    print("SUMMARY: Final Distance (m) - Median (Q1-Q3)")
     print("="*110)
     
     header = f"{'Condition':<25}"
     for mode in modes:
-        header += f" | {mode:<22}"
+        header += f" | {mode:<25}"
     print(header)
     print("-"*110)
     
@@ -438,13 +452,13 @@ def print_summary_table(results: Dict):
         row = f"{cond:<25}"
         for mode in modes:
             m = results[cond][mode]["metrics"]
-            row += f" | {m['final_dist']:.3f} ± {m['final_dist_std']:.3f}       "
+            row += f" | {m['final_dist']:.3f} ({m['final_dist_q1']:.3f}-{m['final_dist_q3']:.3f})  "
         print(row)
     
     print("="*110)
     
     # Success rate table
-    print("\nSuccess Rate (reaching <5cm):")
+    print("\nSuccess Rate (dist<5cm AND ori<15°):")
     print("-"*80)
     header = f"{'Condition':<25}"
     for mode in modes:
@@ -471,30 +485,35 @@ def plot_robustness_results(results: Dict, output_prefix: str = "robustness"):
         'legend.fontsize': 10,
     })
     
-    colors = {"RL": "#F48B96", "CEM": "#9ACD32", "Residual CEM": "#90CCEB"}
-    modes = ["RL", "CEM", "Residual CEM"]
+    colors = {"Policy": "#F48B96", "CEM": "#9ACD32", "Policy-guided CEM": "#90CCEB"}
+    modes = ["Policy", "CEM", "Policy-guided CEM"]
     conditions = list(results.keys())
     n_cond = len(conditions)
     
-    # Bar chart of final distances
+    # Bar chart of final distances with IQR error bars
     fig, ax = plt.subplots(figsize=(max(12, n_cond * 1.2), 6))
     
     x = np.arange(n_cond)
     width = 0.25
     
     for i, mode in enumerate(modes):
-        means = [results[c][mode]["metrics"]["final_dist"] for c in conditions]
-        stds = [results[c][mode]["metrics"]["final_dist_std"] for c in conditions]
+        medians = [results[c][mode]["metrics"]["final_dist"] for c in conditions]
+        q1s = [results[c][mode]["metrics"]["final_dist_q1"] for c in conditions]
+        q3s = [results[c][mode]["metrics"]["final_dist_q3"] for c in conditions]
+        
+        # Asymmetric error bars
+        yerr = [[medians[j] - q1s[j] for j in range(n_cond)],
+                [q3s[j] - medians[j] for j in range(n_cond)]]
         
         offset = (i - 1) * width
-        ax.bar(x + offset, means, width, yerr=stds, 
+        ax.bar(x + offset, medians, width, yerr=yerr, 
                label=mode, color=colors[mode], capsize=3, edgecolor='black', linewidth=0.5)
     
     ax.axhline(y=0.05, color='green', linestyle='--', label='Success (5cm)', alpha=0.7)
     
     ax.set_ylabel('Final Distance to Target (m)')
     ax.set_xlabel('Condition')
-    ax.set_title('Robustness Comparison: RL vs CEM vs Residual CEM')
+    ax.set_title('Robustness Comparison: Policy vs CEM vs Policy-guided CEM\n(Median + IQR)')
     ax.set_xticks(x)
     ax.set_xticklabels(conditions, rotation=45, ha='right')
     ax.legend(loc='upper left')
@@ -518,7 +537,7 @@ def plot_robustness_results(results: Dict, output_prefix: str = "robustness"):
     
     ax.set_ylabel('Success Rate (%)')
     ax.set_xlabel('Condition')
-    ax.set_title('Success Rate Comparison')
+    ax.set_title('Success Rate (dist<5cm, ori<15°)')
     ax.set_xticks(x)
     ax.set_xticklabels(conditions, rotation=45, ha='right')
     ax.legend(loc='upper right')
@@ -536,17 +555,17 @@ def plot_robustness_results(results: Dict, output_prefix: str = "robustness"):
 def generate_latex_table(results: Dict, output_path: str):
     """Generate LaTeX table of results."""
     conditions = list(results.keys())
-    modes = ["RL", "CEM", "Residual CEM"]
+    modes = ["Policy", "CEM", "Policy-guided CEM"]
     
-    def fmt(val, std=None, precision=3):
-        if std is not None:
-            return f"${val:.{precision}f} \\pm {std:.{precision}f}$"
+    def fmt(val, q1=None, q3=None, precision=3):
+        if q1 is not None and q3 is not None:
+            return f"${val:.{precision}f}$ ({q1:.{precision}f}-{q3:.{precision}f})"
         return f"${val:.{precision}f}$"
     
     lines = [
         r"\begin{table}[htbp]",
         r"\centering",
-        r"\caption{Robustness Experiment Results (Final Distance in m)}",
+        r"\caption{Robustness Experiment Results (Final Distance in m, Median with IQR)}",
         r"\label{tab:robustness_results}",
         r"\begin{tabular}{l" + "c" * len(modes) + "}",
         r"\toprule",
@@ -558,7 +577,18 @@ def generate_latex_table(results: Dict, output_path: str):
         row = cond.replace("_", r"\_")
         for mode in modes:
             m = results[cond][mode]["metrics"]
-            row += f" & {fmt(m['final_dist'], m['final_dist_std'])}"
+            row += f" & {fmt(m['final_dist'], m['final_dist_q1'], m['final_dist_q3'])}"
+        row += r" \\"
+        lines.append(row)
+    
+    lines.append(r"\midrule")
+    lines.append(r"\multicolumn{" + str(len(modes) + 1) + r"}{l}{\textit{Success Rate (\%, dist<5cm, ori<15°)}} \\")
+    
+    for cond in conditions:
+        row = cond.replace("_", r"\_")
+        for mode in modes:
+            sr = results[cond][mode]["metrics"]["success_rate"] * 100
+            row += f" & ${sr:.0f}\\%$"
         row += r" \\"
         lines.append(row)
     
@@ -609,7 +639,7 @@ def main():
         mode_name = "QUICK TEST"
     
     print(f"\n{'='*60}")
-    print("ROBUSTNESS EXPERIMENT: RL vs CEM vs Residual CEM")
+    print("ROBUSTNESS EXPERIMENT: Policy vs CEM vs Policy-guided CEM")
     print(f"Mode: {mode_name}")
     print(f"Conditions: {len(perturbations)}")
     print(f"Evaluations per condition: {args.num_evals}")
