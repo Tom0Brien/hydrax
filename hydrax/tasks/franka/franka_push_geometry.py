@@ -599,36 +599,49 @@ class FrankaPushGeometry(Task):
         return self.running_cost(state, jnp.zeros(self.nu))
     
     def domain_randomize_model(self, rng: jax.Array) -> dict:
-        """Randomize mass and friction of the pushed object for domain randomization.
+        """Randomize mass, inertia, and friction of the pushed object for domain randomization.
         
         This method is called by the CEM controller when num_randomizations > 1
         to create multiple randomized models for robust planning.
+        
+        The DR ranges can be configured via class attributes:
+            - dr_mass_range: (min, max) multipliers for mass/inertia (default: (0.5, 2.0))
+            - dr_friction_range: (min, max) multipliers for friction (default: (0.3, 2.0))
         
         Args:
             rng: JAX random key
             
         Returns:
-            Dictionary with randomized model parameters (body_mass, geom_friction).
+            Dictionary with randomized model parameters (body_mass, body_inertia, geom_friction).
         """
         from typing import Dict
         
+        # Get DR ranges from class attributes, with defaults
+        mass_range = getattr(self, 'dr_mass_range', (0.5, 2.0))
+        friction_range = getattr(self, 'dr_friction_range', (0.3, 2.0))
+        
         rng_mass, rng_friction = jax.random.split(rng)
         
-        # Randomize box mass (0.5x to 2.0x of nominal)
-        mass_multiplier = jax.random.uniform(rng_mass, minval=0.5, maxval=2.0)
+        # Randomize box mass (and scale inertia proportionally)
+        mass_multiplier = jax.random.uniform(rng_mass, minval=mass_range[0], maxval=mass_range[1])
         new_body_mass = self.model.body_mass.at[self._obj_body].set(
             self.model.body_mass[self._obj_body] * mass_multiplier
         )
+        # Scale inertia proportionally to mass (like in crane.py)
+        new_body_inertia = self.model.body_inertia.at[self._obj_body].set(
+            self.model.body_inertia[self._obj_body] * mass_multiplier
+        )
         
-        # Randomize friction (0.3x to 2.0x of nominal)
+        # Randomize friction
         # geom_friction has shape (ngeom, 3) where [:, 0] is sliding friction
-        friction_multiplier = jax.random.uniform(rng_friction, minval=0.3, maxval=2.0)
+        friction_multiplier = jax.random.uniform(rng_friction, minval=friction_range[0], maxval=friction_range[1])
         new_geom_friction = self.model.geom_friction.at[self._obj_geom, 0].set(
             self.model.geom_friction[self._obj_geom, 0] * friction_multiplier
         )
         
         return {
             "body_mass": new_body_mass,
+            "body_inertia": new_body_inertia,
             "geom_friction": new_geom_friction,
         }
 

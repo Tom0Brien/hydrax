@@ -5,11 +5,11 @@ This script tests whether domain randomization (DR) in the SPC planner
 for the residual CEM + policy architecture.
 
 Compares:
-1. Policy: Pre-trained policy alone (zero residuals)
-2. Policy-guided CEM: CEM with policy but NO domain randomization
-3. Policy-guided CEM (DR): CEM with policy AND domain randomization
+1. RL: Pre-trained policy alone
+2. CEM: Standard CEM without policy guidance
+3. Policy-guided CEM: Residual CEM with policy guidance
 
-The CEM controllers use domain randomization over mass and friction,
+The Policy-guided CEM controller uses domain randomization over mass and friction,
 without knowing the true perturbation applied to the real environment.
 
 Usage:
@@ -58,7 +58,6 @@ def get_perturbations(mode: str) -> List[PhysicsPerturbation]:
         ]
     elif mode == "full":
         return [
-            PhysicsPerturbation("nominal", 1.0, 1.0),
             PhysicsPerturbation("heavy", 2.0, 1.0),
             PhysicsPerturbation("light", 0.5, 1.0),
             PhysicsPerturbation("slippery", 1.0, 0.3),
@@ -365,24 +364,22 @@ def run_condition_experiment(
     print(f"  Running {num_evals} evals in batches of {num_envs}")
     print('='*60)
     
-    modes = ["Policy", "Policy-guided CEM", "Policy-guided CEM (DR)"]
+    modes = ["RL", "CEM", "Policy-guided CEM"]
     results = {}
     
     for mode in modes:
         print(f"\n  {mode}...", end=" ", flush=True)
         start = time.time()
         
-        # Create fresh task - all modes use the RL policy
-        task = FrankaPushGeometry(geometry="cube", use_rl_policy=True)
+        # Create fresh task
+        use_rl = mode in ["RL", "Policy-guided CEM"]
+        task = FrankaPushGeometry(geometry="cube", use_rl_policy=use_rl)
         
         # Apply perturbation to the SIMULATION model (real environment)
         apply_physics_perturbation(task.mj_model, perturbation, task)
         
         # Create controller if needed
-        use_cem = mode in ["Policy-guided CEM", "Policy-guided CEM (DR)"]
-        if use_cem:
-            # Determine number of randomizations based on mode
-            n_rand = num_randomizations if mode == "Policy-guided CEM (DR)" else 1
+        if mode == "CEM":
             controller = CEM(
                 task=task,
                 num_samples=64,
@@ -393,8 +390,20 @@ def run_condition_experiment(
                 plan_horizon=0.5,
                 spline_type="zero",
                 num_knots=6,
-                num_randomizations=n_rand,
-                risk_strategy=ConditionalValueAtRisk(alpha=0.25) if n_rand > 1 else None,
+            )
+        elif mode == "Policy-guided CEM":
+            controller = CEM(
+                task=task,
+                num_samples=64,
+                num_elites=16,
+                sigma_start=0.1,
+                sigma_min=0.05,
+                explore_fraction=0.5,
+                plan_horizon=0.5,
+                spline_type="zero",
+                num_knots=6,
+                num_randomizations=num_randomizations,
+                risk_strategy=ConditionalValueAtRisk(alpha=0.25),
             )
         else:
             controller = None
@@ -446,7 +455,7 @@ def run_dr_experiment(
 def print_summary_table(results: Dict):
     """Print formatted summary table."""
     conditions = list(results.keys())
-    modes = ["Policy", "Policy-guided CEM", "Policy-guided CEM (DR)"]
+    modes = ["RL", "CEM", "Policy-guided CEM"]
     
     print("\n" + "="*110)
     print("SUMMARY: Final Distance (m) - Median (Q1-Q3)")
@@ -495,8 +504,8 @@ def plot_dr_results(results: Dict, output_prefix: str = "dr_experiment"):
         'legend.fontsize': 10,
     })
     
-    colors = {"Policy": "#F48B96", "Policy-guided CEM": "#9ACD32", "Policy-guided CEM (DR)": "#90CCEB"}
-    modes = ["Policy", "Policy-guided CEM", "Policy-guided CEM (DR)"]
+    colors = {"RL": "#F48B96", "CEM": "#9ACD32", "Policy-guided CEM": "#90CCEB"}
+    modes = ["RL", "CEM", "Policy-guided CEM"]
     conditions = list(results.keys())
     n_cond = len(conditions)
     
@@ -523,7 +532,7 @@ def plot_dr_results(results: Dict, output_prefix: str = "dr_experiment"):
     
     ax.set_ylabel('Final Distance to Target (m)')
     ax.set_xlabel('Perturbation Condition')
-    ax.set_title('Domain Randomization Experiment: Effect of DR on Policy-guided CEM\n(Median + IQR)')
+    ax.set_title('Domain Randomization Experiment: RL vs CEM vs Policy-guided CEM\n(Median + IQR)')
     ax.set_xticks(x)
     ax.set_xticklabels(conditions, rotation=45, ha='right')
     ax.legend(loc='upper left')
@@ -565,7 +574,7 @@ def plot_dr_results(results: Dict, output_prefix: str = "dr_experiment"):
 def generate_latex_table(results: Dict, output_path: str):
     """Generate LaTeX table of results."""
     conditions = list(results.keys())
-    modes = ["Policy", "Policy-guided CEM", "Policy-guided CEM (DR)"]
+    modes = ["RL", "CEM", "Policy-guided CEM"]
     
     def fmt(val, q1=None, q3=None, precision=3):
         if q1 is not None and q3 is not None:
@@ -640,7 +649,7 @@ def main():
     
     print(f"\n{'='*60}")
     print("DOMAIN RANDOMIZATION EXPERIMENT")
-    print("Comparing: Policy vs Policy-guided CEM vs Policy-guided CEM (DR)")
+    print("Comparing: RL vs CEM vs Policy-guided CEM")
     print(f"{'='*60}")
     print(f"Mode: {args.mode.upper()}")
     print(f"Perturbation conditions: {len(perturbations)}")

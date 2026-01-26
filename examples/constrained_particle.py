@@ -16,22 +16,37 @@ import mujoco
 from hydrax.algs import CCEM
 from hydrax.simulation.deterministic import run_interactive
 from hydrax.tasks.constrained_particle import ConstrainedParticle
+from hydrax.algs import ALCEM
+
 
 # Define the constrained task
 task = ConstrainedParticle(box_size=0.1)
 
 # Create the Constrained CEM controller
-ctrl = CCEM(
-    task,
-    num_samples=512,  # Sample more trajectories to find feasible ones
-    num_elites=20,  # Number of elite samples to keep
-    sigma_start=0.3,  # Initial standard deviation
-    sigma_min=0.05,  # Minimum standard deviation
-    explore_fraction=0.5,  # Fraction of samples to keep at sigma_start
-    num_randomizations=1,  # No domain randomization for simplicity
-    plan_horizon=0.25,  # Planning horizon in seconds
-    spline_type="zero",  # Zero-order hold for control interpolation
-    num_knots=11,  # Number of control knots
+# ctrl = CCEM(
+#     task,
+#     num_samples=512,  # Sample more trajectories to find feasible ones
+#     num_elites=20,  # Number of elite samples to keep
+#     sigma_start=0.3,  # Initial standard deviation
+#     sigma_min=0.05,  # Minimum standard deviation
+#     explore_fraction=0.5,  # Fraction of samples to keep at sigma_start
+#     num_randomizations=1,  # No domain randomization for simplicity
+#     plan_horizon=0.25,  # Planning horizon in seconds
+#     spline_type="zero",  # Zero-order hold for control interpolation
+#     num_knots=11,  # Number of control knots
+# )
+
+ctrl = ALCEM(
+    task=task,
+    num_samples=128,
+    num_elites=16,
+    sigma_start=0.1,
+    sigma_min=0.01,
+    # Augmented Lagrangian parameters
+    lambda_init=0.0,      # Initial Lagrange multiplier
+    rho_init=1.0,         # Initial penalty coefficient
+    rho_max=1000.0,       # Max penalty coefficient
+    adapt_rho=True,       # Automatically increase rho if violations persist
 )
 
 # Define the model used for simulation

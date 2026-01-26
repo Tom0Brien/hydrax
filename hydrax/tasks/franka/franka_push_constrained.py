@@ -1,8 +1,9 @@
-"""Franka push task with table boundary constraints.
+"""Franka push task with cylinder obstacle avoidance constraint.
 
-This module provides a constrained version of FrankaPushGeometry that ensures
-the pushed object stays within a safe zone on the table. This demonstrates the
-benefit of combining pre-trained RL policies with constrained online planning (CCEM).
+This module provides a constrained version of FrankaPushGeometry that includes
+a cylinder obstacle in the workspace that the pushed object must avoid.
+This demonstrates the benefit of combining pre-trained RL policies with 
+constrained online planning (CCEM) for obstacle avoidance.
 """
 
 from pathlib import Path
@@ -15,101 +16,142 @@ from mujoco import mjx
 
 from hydrax.tasks.franka.franka_push_geometry import FrankaPushGeometry, _XMLS_PATH
 
-# Add constrained scene to available geometries
-CONSTRAINED_GEOMETRY_XMLS = {
-    "cube": "scene_panda_robotiq_cube_constrained.xml",
-    "square": "scene_panda_robotiq_square_constrained.xml",
+# Add obstacle scene to available geometries
+OBSTACLE_GEOMETRY_XMLS = {
+    "square": "scene_panda_robotiq_cube_obstacle.xml",
 }
 
-# Object half-sizes for each geometry (used for face-based constraints)
+# Object half-sizes for each geometry (used for collision margin)
 GEOMETRY_HALF_SIZES = {
     "cube": (0.07553, 0.11482),   # x, y half-sizes for rectangular cube
     "square": (0.05073, 0.05073), # x, y half-sizes for square cube
 }
 
+# Cylinder obstacle parameters
+OBSTACLE_POS = jnp.array([0.55, 0.05])  # x, y position of cylinder center
+OBSTACLE_RADIUS = 0.04  # radius of the cylinder
+
 
 class FrankaPushConstrained(FrankaPushGeometry):
-    """Franka push task with safe zone constraints.
+    """Franka push task with cylinder obstacle avoidance.
     
-    The pushed object must stay within a defined safe zone on the table.
-    The constraint is based on the FACE of the cube - i.e., the entire
-    object must be inside the safe zone, not just its center.
+    The pushed object must avoid colliding with a fixed cylinder obstacle
+    placed in the workspace. The constraint is based on the distance between
+    the box center and the cylinder, accounting for both the cylinder radius
+    and an approximation of the box extent.
     
-    Safe zone parameters (default):
-    - Center: (0.525, 0.0) - center of the table workspace
-    - Half-size: 0.2m - object faces must stay within ±0.2m of center
+    Obstacle parameters:
+    - Position: (0.55, 0.05) - between typical box start and target
+    - Radius: 0.04m - creates a meaningful obstacle in the workspace
     
-    The constraint accounts for the object's geometry, so larger objects
-    have less room to move before hitting the boundary.
+    The constraint uses a safety margin to account for the box dimensions,
+    approximating the box as a circle with radius equal to the max half-size.
     """
     
     def __init__(
         self,
-        geometry: Literal["cube", "square"] = "square",
+        geometry: Literal["square"] = "square",
         use_rl_policy: bool = True,
-        safe_zone_center: tuple = (0.525, 0.0),
-        safe_zone_half_size: float = 0.2,
+        safety_margin: float = 0.02,
     ):
-        """Initialize the constrained push task.
+        """Initialize the obstacle avoidance push task.
         
         Args:
-            geometry: Object geometry type ("cube" or "square")
+            geometry: Object geometry type (currently only "cube" supported)
             use_rl_policy: If True, load RL policy for residual control
-            safe_zone_center: (x, y) center of the safe zone in meters
-            safe_zone_half_size: Half-size of the square safe zone in meters
-                                (measured to where object FACE would hit boundary)
+            safety_margin: Additional margin beyond box+cylinder radii (meters)
         """
         # Store constraint parameters before calling super().__init__
-        self.safe_zone_center = jnp.array(safe_zone_center)
-        self.safe_zone_half_size = safe_zone_half_size
+        self.safety_margin = safety_margin
+        self.obstacle_pos = OBSTACLE_POS
+        self.obstacle_radius = OBSTACLE_RADIUS
         
-        # Store object half-size for face-based constraint
+        # Store object half-size for collision check
         if geometry not in GEOMETRY_HALF_SIZES:
             raise ValueError(f"Unknown geometry '{geometry}'")
-        self.obj_half_size = jnp.array(GEOMETRY_HALF_SIZES[geometry])
+        obj_half_size = GEOMETRY_HALF_SIZES[geometry]
+        # Approximate box as circle with radius = max dimension
+        self.obj_radius = jnp.sqrt(obj_half_size[0]**2 + obj_half_size[1]**2)
         
-        # Override XML path to use constrained scene
-        self._use_constrained_scene = True
+        # Minimum safe distance (cylinder radius + box radius + margin)
+        self.min_safe_dist = self.obstacle_radius + self.obj_radius + self.safety_margin
         
         # Call parent __init__
         super().__init__(geometry=geometry, use_rl_policy=use_rl_policy)
+        
+        # Store obstacle body ID for potential future use
+        self._obstacle_body = mujoco.mj_name2id(
+            self.mj_model, mujoco.mjtObj.mjOBJ_BODY, "obstacle"
+        )
     
     def _get_xml_path(self, geometry: str) -> Path:
-        """Get the XML path for the constrained scene."""
-        if geometry not in CONSTRAINED_GEOMETRY_XMLS:
-            raise ValueError(f"Constrained scene not available for geometry '{geometry}'. "
-                           f"Available: {list(CONSTRAINED_GEOMETRY_XMLS.keys())}")
-        return _XMLS_PATH / CONSTRAINED_GEOMETRY_XMLS[geometry]
+        """Get the XML path for the obstacle scene."""
+        if geometry not in OBSTACLE_GEOMETRY_XMLS:
+            raise ValueError(f"Obstacle scene not available for geometry '{geometry}'. "
+                           f"Available: {list(OBSTACLE_GEOMETRY_XMLS.keys())}")
+        return _XMLS_PATH / OBSTACLE_GEOMETRY_XMLS[geometry]
     
     def constraint_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
-        """Constraint cost for keeping the box FACE within the safe zone.
+        """Constraint cost for obstacle avoidance.
         
-        The constraint checks if any face of the cube would exit the safe zone.
-        This is more restrictive than just checking the center.
+        Computes the signed distance from the box to the obstacle cylinder.
+        Uses the box center position and approximates the box as a circle.
+        
+        The obstacle position is read from state.xpos to support per-environment
+        obstacle positions when using vmap.
         
         Returns:
-            Positive value when any face is outside safe zone (constraint violated)
-            Negative value when all faces are inside safe zone (constraint satisfied)
-            Zero when a face is exactly on the boundary
+            Positive value when box is too close to obstacle (constraint violated)
+            Negative value when box is safely away from obstacle (constraint satisfied)
+            Zero when box edge is exactly at the safety boundary
         """
         # Get box center position (x, y only)
         box_center = state.xpos[self._obj_body, :2]
         
-        # Calculate position of box faces (center ± half_size)
-        # For a square constraint, we only care about max extent in each direction
-        # Note: This assumes axis-aligned box (no rotation consideration for simplicity)
-        box_max = box_center + self.obj_half_size
-        box_min = box_center - self.obj_half_size
+        # Get obstacle position from state (supports per-env obstacle positions)
+        obstacle_center = state.xpos[self._obstacle_body, :2]
         
-        # Safe zone boundaries
-        safe_max = self.safe_zone_center + self.safe_zone_half_size
-        safe_min = self.safe_zone_center - self.safe_zone_half_size
+        # Distance from box center to obstacle center
+        dist_to_obstacle = jnp.linalg.norm(box_center - obstacle_center)
         
-        # Check violation: how far any face extends beyond safe zone
-        # Positive = outside, negative = inside
-        violation_max = jnp.max(box_max - safe_max)  # Right/top face exits
-        violation_min = jnp.max(safe_min - box_min)  # Left/bottom face exits
+        # Constraint violation: positive when distance < min_safe_dist
+        # Negative when safe, zero at boundary
+        violation = self.min_safe_dist - dist_to_obstacle
         
-        # Overall constraint: max violation from any direction
-        return jnp.maximum(violation_max, violation_min)
+        return violation
 
+    def running_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
+        """Running cost with repulsive potential for obstacle avoidance.
+        
+        Extends the parent running cost with a smooth repulsive potential
+        around the obstacle. This helps guide the optimizer around the obstacle
+        rather than getting stuck in local minima where all forward paths
+        are blocked.
+        
+        The repulsion uses an inverse-distance potential that:
+        - Is zero outside the influence radius (2x min_safe_dist)
+        - Increases smoothly as the box approaches the obstacle
+        - Creates a gradient that pushes samples away from the obstacle
+        """
+        # Get base running cost from parent
+        base_cost = super().running_cost(state, control)
+        
+        # Compute repulsive potential around obstacle
+        box_xy = state.xpos[self._obj_body, :2]
+        obstacle_xy = state.xpos[self._obstacle_body, :2]
+        dist = jnp.linalg.norm(box_xy - obstacle_xy)
+        
+        # Influence radius: repulsion active within this distance
+        influence_radius = self.min_safe_dist * 2.5
+        
+        # Smooth inverse-distance repulsion (Khatib-style potential field)
+        # Repulsion = 0.5 * eta * (1/dist - 1/influence_radius)^2 when dist < influence_radius
+        # This creates a smooth gradient pushing away from obstacle
+        eta = 0.5  # Repulsion strength (tunable)
+        repulsion = jnp.where(
+            dist < influence_radius,
+            0.5 * eta * jnp.square(1.0 / (dist + 1e-3) - 1.0 / influence_radius),
+            0.0
+        )
+        
+        return base_cost + repulsion

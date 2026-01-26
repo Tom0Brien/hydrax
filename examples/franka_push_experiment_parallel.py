@@ -617,8 +617,8 @@ def main():
     task2 = FrankaPushGeometry(geometry="cube", use_rl_policy=False)
     ctrl2 = CEM(
         task=task2,
-        num_samples=128,
-        num_elites=16,
+        num_samples=32,
+        num_elites=4,
         sigma_start=0.1,
         sigma_min=0.05,
         explore_fraction=0.5,
@@ -642,8 +642,8 @@ def main():
     task3 = FrankaPushGeometry(geometry="cube", use_rl_policy=True)
     ctrl3 = CEM(
         task=task3,
-        num_samples=128,
-        num_elites=16,
+        num_samples=42,
+        num_elites=4,
         sigma_start=0.1,
         sigma_min=0.05,
         explore_fraction=0.5,

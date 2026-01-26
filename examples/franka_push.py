@@ -42,8 +42,8 @@ def main() -> None:
     # Initialize controller
     ctrl = CEM(
         task=task,
-        num_samples=128,
-        num_elites=16,
+        num_samples=32,
+        num_elites=4,
         sigma_start=0.1,  # Small - residuals should be small
         sigma_min=0.05,
         explore_fraction=0.5,

@@ -72,7 +72,7 @@ class PredictiveSampling(SamplingBasedController):
     ) -> PSParams:
         """Initialize the policy parameters."""
         _params = super().init_params(initial_knots, seed)
-        return PSParams(tk=_params.tk, mean=_params.mean, rng=_params.rng)
+        return PSParams(tk=_params.tk, mean=_params.mean,opt_iteration=_params.opt_iteration, rng=_params.rng)
 
     def sample_knots(self, params: PSParams) -> Tuple[jax.Array, PSParams]:
         """Sample a control sequence."""
