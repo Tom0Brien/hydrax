@@ -43,6 +43,7 @@ class ParallelRolloutData(NamedTuple):
     gripper_pos: jax.Array  # (num_envs, num_steps, 3)
     target_pos: jax.Array  # (num_envs, 3)
     target_quat: jax.Array  # (num_envs, 4)
+    running_cost: jax.Array  # (num_envs, num_steps) - per-step running cost
 
 
 def quat_angle_error(q1: jax.Array, q2: jax.Array) -> jax.Array:
@@ -182,6 +183,13 @@ def run_parallel_rollout(
     all_box_target_dist = []
     all_box_ori_error = []
     all_gripper_pos = []
+    all_running_cost = []
+    
+    # JIT compile running cost function for batch evaluation
+    @jax.jit
+    def compute_running_cost_batch(mjx_data_batch, ctrl_batch):
+        """Compute running cost for all environments."""
+        return jax.vmap(task.running_cost)(mjx_data_batch, ctrl_batch)
     
     # Get body/site IDs
     obj_body_id = task._obj_body
@@ -234,6 +242,10 @@ def run_parallel_rollout(
             # Gripper positions
             gripper_pos = mjx_data.site_xpos[:, gripper_site_id, :]
             all_gripper_pos.append(gripper_pos)
+            
+            # Running cost
+            step_cost = compute_running_cost_batch(mjx_data, ctrl_batch)
+            all_running_cost.append(step_cost)
         
         if step % 10 == 0:
             print(f"Step {step}/{num_replans}", end="\r")
@@ -250,6 +262,7 @@ def run_parallel_rollout(
         gripper_pos=jnp.stack(all_gripper_pos, axis=1),
         target_pos=target_pos,
         target_quat=target_quat,
+        running_cost=jnp.stack(all_running_cost, axis=1),
     )
 
 
@@ -300,6 +313,7 @@ def run_batched_experiment(
         gripper_pos=jnp.concatenate([d.gripper_pos for d in all_data], axis=0),
         target_pos=jnp.concatenate([d.target_pos for d in all_data], axis=0),
         target_quat=jnp.concatenate([d.target_quat for d in all_data], axis=0),
+        running_cost=jnp.concatenate([d.running_cost for d in all_data], axis=0),
     )
     
     return combined
@@ -308,41 +322,26 @@ def run_batched_experiment(
 def compute_metrics(data: ParallelRolloutData) -> dict:
     """Compute metrics from parallel rollout data.
     
-    Uses median and IQR (interquartile range) for robust statistics
-    on non-negative error metrics.
+    Metrics:
+    - Final position error (median + IQR)
+    - Final orientation error (median + IQR)
+    - Total running cost (accumulated over episode)
+    - Time to success (dist < 3cm AND ori < 10°)
+    - Success rate (based on final state)
     """
     times = np.array(data.time)
     dists = np.array(data.box_target_dist)  # (num_envs, num_steps)
     ori_errors = np.array(data.box_ori_error)  # (num_envs, num_steps)
-    
-    # Skip first 1s for transient
-    mask = times > 1.0
-    if not np.any(mask):
-        mask = np.ones_like(times, dtype=bool)
+    running_costs = np.array(data.running_cost)  # (num_envs, num_steps)
     
     num_envs = dists.shape[0]
     
-    # Position metrics (per environment, then aggregate)
-    mean_dist_per_env = np.mean(dists[:, mask], axis=1)
+    # Final state metrics
     final_dist_per_env = dists[:, -1]
-    min_dist_per_env = np.min(dists[:, mask], axis=1)
+    final_ori_per_env = ori_errors[:, -1]  # in radians
     
-    # Orientation metrics (convert to degrees for readability)
-    mean_ori_per_env = np.mean(ori_errors[:, mask], axis=1)
-    final_ori_per_env = ori_errors[:, -1]
-    
-    # Combined error: position + orientation (weighted)
-    ori_weight = 0.1 * (180 / np.pi)
-    total_error_per_env = mean_dist_per_env + ori_weight * mean_ori_per_env
-    
-    # Time to reach within 5cm
-    def time_to_threshold(dist_seq, threshold=0.05):
-        within = dist_seq < threshold
-        if np.any(within):
-            return times[np.argmax(within)]
-        return float('inf')
-    
-    time_to_5cm = np.array([time_to_threshold(dists[i]) for i in range(num_envs)])
+    # Total running cost (accumulated over episode)
+    total_running_cost_per_env = np.sum(running_costs, axis=1)
     
     # Helper for median + IQR stats
     def median_iqr(arr):
@@ -351,53 +350,67 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
         q3 = float(np.percentile(arr, 75))
         return median, q1, q3
     
-    # Position metrics with median/IQR
-    mean_dist_median, mean_dist_q1, mean_dist_q3 = median_iqr(mean_dist_per_env)
+    # Final position with median/IQR
     final_dist_median, final_dist_q1, final_dist_q3 = median_iqr(final_dist_per_env)
-    min_dist_median, min_dist_q1, min_dist_q3 = median_iqr(min_dist_per_env)
     
-    # Orientation metrics with median/IQR (in degrees)
-    mean_ori_median, mean_ori_q1, mean_ori_q3 = median_iqr(mean_ori_per_env * 180 / np.pi)
-    final_ori_median, final_ori_q1, final_ori_q3 = median_iqr(final_ori_per_env * 180 / np.pi)
+    # Final orientation with median/IQR (in degrees)
+    final_ori_deg_per_env = final_ori_per_env * 180 / np.pi
+    final_ori_median, final_ori_q1, final_ori_q3 = median_iqr(final_ori_deg_per_env)
     
-    # Total error with median/IQR
-    total_error_median, total_error_q1, total_error_q3 = median_iqr(total_error_per_env)
+    # Total running cost with median/IQR
+    total_cost_median, total_cost_q1, total_cost_q3 = median_iqr(total_running_cost_per_env)
     
-    # Success thresholds
-    pos_threshold = 0.05  # 5cm position error
-    ori_threshold = 15.0 * np.pi / 180  # 15 degrees orientation error
+    # Success thresholds: dist < 3cm AND ori < 10 degrees
+    pos_threshold = 0.03  # 3cm position error
+    ori_threshold = 10.0 * np.pi / 180  # 10 degrees orientation error
     
-    # Success requires BOTH position AND orientation criteria
+    # Time to success: first time BOTH position and orientation are within threshold
+    def time_to_success(dist_seq, ori_seq):
+        within_pos = dist_seq < pos_threshold
+        within_ori = ori_seq < ori_threshold
+        success_mask = within_pos & within_ori
+        if np.any(success_mask):
+            return times[np.argmax(success_mask)]
+        return float('inf')
+    
+    time_to_success_per_env = np.array([
+        time_to_success(dists[i], ori_errors[i]) for i in range(num_envs)
+    ])
+    
+    # Time to success with median/IQR (only for successful runs)
+    successful_times = time_to_success_per_env[time_to_success_per_env < float('inf')]
+    if len(successful_times) > 0:
+        time_success_median, time_success_q1, time_success_q3 = median_iqr(successful_times)
+    else:
+        time_success_median = float('inf')
+        time_success_q1 = float('inf')
+        time_success_q3 = float('inf')
+    
+    # Success rate (based on final state)
     success_per_env = (final_dist_per_env < pos_threshold) & (final_ori_per_env < ori_threshold)
     
     return {
-        # Position metrics (median + IQR)
-        "mean_dist": mean_dist_median,
-        "mean_dist_q1": mean_dist_q1,
-        "mean_dist_q3": mean_dist_q3,
+        # Final position (median + IQR)
         "final_dist": final_dist_median,
         "final_dist_q1": final_dist_q1,
         "final_dist_q3": final_dist_q3,
-        "min_dist": min_dist_median,
-        "min_dist_q1": min_dist_q1,
-        "min_dist_q3": min_dist_q3,
         
-        # Orientation metrics (in degrees, median + IQR)
-        "mean_ori_error": mean_ori_median,
-        "mean_ori_error_q1": mean_ori_q1,
-        "mean_ori_error_q3": mean_ori_q3,
+        # Final orientation in degrees (median + IQR)
         "final_ori_error": final_ori_median,
         "final_ori_error_q1": final_ori_q1,
         "final_ori_error_q3": final_ori_q3,
         
-        # Combined metrics (median + IQR)
-        "total_error": total_error_median,
-        "total_error_q1": total_error_q1,
-        "total_error_q3": total_error_q3,
+        # Total running cost (median + IQR)
+        "total_running_cost": total_cost_median,
+        "total_running_cost_q1": total_cost_q1,
+        "total_running_cost_q3": total_cost_q3,
         
-        # Success metrics
-        "time_to_5cm": float(np.median(time_to_5cm[time_to_5cm < float('inf')])) 
-            if np.any(time_to_5cm < float('inf')) else float('inf'),
+        # Time to success (median + IQR)
+        "time_to_success": time_success_median,
+        "time_to_success_q1": time_success_q1,
+        "time_to_success_q3": time_success_q3,
+        
+        # Success rate
         "success_rate": float(np.mean(success_per_env)),
         
         # Count
@@ -413,58 +426,73 @@ def plot_bar_comparison(results: dict, output_path: str):
     approaches = ["Policy", "CEM", "Policy-guided CEM"]
     colors = {"Policy": "#F48B96", "CEM": "#9ACD32", "Policy-guided CEM": "#90CCEB"}
     
-    # Metrics to plot: (key, label, is_percentage)
+    # Metrics to plot: (key, label, is_percentage, format_str)
     metrics = [
-        ("final_dist", "Final Position Error (m)", False),
-        ("final_ori_error", "Final Orientation Error (°)", False),
-        ("total_error", "Total Error", False),
-        ("success_rate", "Success Rate (%)", True),
+        ("final_dist", "Final Position Error (m)", False, ".3f"),
+        ("final_ori_error", "Final Orientation Error (°)", False, ".1f"),
+        ("total_running_cost", "Total Running Cost", False, ".1f"),
+        ("time_to_success", "Time to Success (s)", False, ".2f"),
+        ("success_rate", "Success Rate (%)", True, ".1f"),
     ]
     
-    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     axes = axes.flatten()
     
-    for ax, (metric, label, is_percentage) in zip(axes, metrics):
+    for ax, (metric, label, is_percentage, fmt) in zip(axes, metrics):
         values = [results[a]["metrics"][metric] for a in approaches]
+        
+        # Handle inf values for time_to_success
+        display_values = [v if v != float('inf') else 0 for v in values]
         
         if is_percentage:
             # Success rate doesn't have IQR, just show the value
-            values = [v * 100 for v in values]
+            display_values = [v * 100 for v in display_values]
             yerr = None
         else:
             # Get Q1 and Q3 for asymmetric error bars
-            q1s = [results[a]["metrics"].get(f"{metric}_q1", values[i]) for i, a in enumerate(approaches)]
-            q3s = [results[a]["metrics"].get(f"{metric}_q3", values[i]) for i, a in enumerate(approaches)]
+            q1s = [results[a]["metrics"].get(f"{metric}_q1", display_values[i]) for i, a in enumerate(approaches)]
+            q3s = [results[a]["metrics"].get(f"{metric}_q3", display_values[i]) for i, a in enumerate(approaches)]
+            # Handle inf values
+            q1s = [v if v != float('inf') else 0 for v in q1s]
+            q3s = [v if v != float('inf') else 0 for v in q3s]
             # Error bars: lower = value - Q1, upper = Q3 - value
-            yerr = [[values[i] - q1s[i] for i in range(len(approaches))],
-                    [q3s[i] - values[i] for i in range(len(approaches))]]
+            yerr = [[max(0, display_values[i] - q1s[i]) for i in range(len(approaches))],
+                    [max(0, q3s[i] - display_values[i]) for i in range(len(approaches))]]
         
         x = np.arange(len(approaches))
-        bars = ax.bar(x, values, yerr=yerr, capsize=5,
+        bars = ax.bar(x, display_values, yerr=yerr, capsize=5,
                       color=[colors[a] for a in approaches],
                       edgecolor='black', linewidth=1.5)
         
         ax.set_xticks(x)
-        ax.set_xticklabels(approaches)
+        ax.set_xticklabels(approaches, rotation=15, ha='right')
         ax.set_ylabel(label)
         ax.set_title(label)
         ax.grid(True, alpha=0.3, axis='y')
         ax.set_ylim(0, None)  # Ensure y-axis starts at 0
         
         # Add value labels on bars
-        for i, (bar, val) in enumerate(zip(bars, values)):
+        for i, (bar, val, orig_val) in enumerate(zip(bars, display_values, values)):
             height = bar.get_height()
             # Position label above the upper error bar
-            if yerr is not None:
-                label_y = height + yerr[1][i] + 0.01 * max(values)
+            if yerr is not None and max(display_values) > 0:
+                label_y = height + yerr[1][i] + 0.01 * max(display_values)
             else:
                 label_y = height + 2
-            if is_percentage:
+            
+            # Show "N/A" for inf values
+            if orig_val == float('inf'):
+                ax.text(bar.get_x() + bar.get_width()/2., label_y,
+                       'N/A', ha='center', va='bottom', fontsize=10)
+            elif is_percentage:
                 ax.text(bar.get_x() + bar.get_width()/2., label_y,
                        f'{val:.1f}%', ha='center', va='bottom', fontsize=10)
             else:
                 ax.text(bar.get_x() + bar.get_width()/2., label_y,
-                       f'{val:.3f}', ha='center', va='bottom', fontsize=10)
+                       f'{val:{fmt}}', ha='center', va='bottom', fontsize=10)
+    
+    # Hide the last (empty) subplot
+    axes[-1].set_visible(False)
     
     plt.suptitle(f"Franka Push Comparison - Median + IQR (n={results['Policy']['metrics']['num_evals']} evals)", 
                  fontsize=16, fontweight='bold')
@@ -482,7 +510,8 @@ def plot_bar_comparison(results: dict, output_path: str):
 def generate_latex_table(results: dict, output_path: str):
     """Generate a LaTeX formatted table of all metrics.
     
-    Uses median with IQR (Q1-Q3) instead of mean ± std.
+    Uses median with IQR (Q1-Q3) for error bars.
+    Metrics: Final position/orientation, total running cost, time to success, success rate.
     
     Args:
         results: Dictionary with results for each approach
@@ -494,7 +523,7 @@ def generate_latex_table(results: dict, output_path: str):
     def fmt(val, q1=None, q3=None, precision=4):
         if val == float('inf'):
             return "N/A"
-        if q1 is not None and q3 is not None:
+        if q1 is not None and q3 is not None and q1 != float('inf') and q3 != float('inf'):
             return f"${val:.{precision}f}$ ({q1:.{precision}f}-{q3:.{precision}f})"
         return f"${val:.{precision}f}$"
     
@@ -512,49 +541,45 @@ def generate_latex_table(results: dict, output_path: str):
         r"\midrule",
     ]
     
-    # Position metrics
-    lines.append(r"\multicolumn{4}{l}{\textit{Position Error}} \\")
-    for metric, label in [("mean_dist", "Mean Distance (m)"), 
-                          ("final_dist", "Final Distance (m)"),
-                          ("min_dist", "Min Distance (m)")]:
-        vals = [fmt(results[a]["metrics"][metric], 
-                   results[a]["metrics"].get(f"{metric}_q1"),
-                   results[a]["metrics"].get(f"{metric}_q3")) 
-                for a in approaches]
-        lines.append(f"{label} & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
-    
-    lines.append(r"\midrule")
-    
-    # Orientation metrics
-    lines.append(r"\multicolumn{4}{l}{\textit{Orientation Error}} \\")
-    for metric, label in [("mean_ori_error", "Mean Orientation ($^\\circ$)"),
-                          ("final_ori_error", "Final Orientation ($^\\circ$)")]:
-        vals = [fmt(results[a]["metrics"][metric], 
-                   results[a]["metrics"].get(f"{metric}_q1"),
-                   results[a]["metrics"].get(f"{metric}_q3"), precision=2) 
-                for a in approaches]
-        lines.append(f"{label} & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
-    
-    lines.append(r"\midrule")
-    
-    # Combined and success metrics
-    lines.append(r"\multicolumn{4}{l}{\textit{Summary Metrics}} \\")
-    
-    vals = [fmt(results[a]["metrics"]["total_error"], 
-               results[a]["metrics"].get("total_error_q1"),
-               results[a]["metrics"].get("total_error_q3")) 
+    # Final position error
+    vals = [fmt(results[a]["metrics"]["final_dist"], 
+               results[a]["metrics"].get("final_dist_q1"),
+               results[a]["metrics"].get("final_dist_q3"), precision=3) 
             for a in approaches]
-    lines.append(f"Total Error & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
+    lines.append(f"Final Position Error (m) & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
     
-    vals = [fmt(results[a]["metrics"]["time_to_5cm"], precision=2) for a in approaches]
-    lines.append(f"Time to 5cm (s) & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
+    # Final orientation error
+    vals = [fmt(results[a]["metrics"]["final_ori_error"], 
+               results[a]["metrics"].get("final_ori_error_q1"),
+               results[a]["metrics"].get("final_ori_error_q3"), precision=1) 
+            for a in approaches]
+    lines.append(f"Final Orientation Error ($^\\circ$) & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
     
+    lines.append(r"\midrule")
+    
+    # Total running cost
+    vals = [fmt(results[a]["metrics"]["total_running_cost"], 
+               results[a]["metrics"].get("total_running_cost_q1"),
+               results[a]["metrics"].get("total_running_cost_q3"), precision=1) 
+            for a in approaches]
+    lines.append(f"Total Running Cost & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
+    
+    # Time to success
+    vals = [fmt(results[a]["metrics"]["time_to_success"], 
+               results[a]["metrics"].get("time_to_success_q1"),
+               results[a]["metrics"].get("time_to_success_q3"), precision=2) 
+            for a in approaches]
+    lines.append(f"Time to Success (s) & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
+    
+    # Success rate
     vals = [fmt_pct(results[a]["metrics"]["success_rate"]) for a in approaches]
     lines.append(f"Success Rate & {vals[0]} & {vals[1]} & {vals[2]} \\\\")
     
     lines.extend([
         r"\bottomrule",
         r"\end{tabular}",
+        r"\vspace{1mm}",
+        r"\footnotesize{Success = position error $<$ 3cm AND orientation error $<$ 10$^\circ$}",
         r"\end{table}",
     ])
     
@@ -617,14 +642,15 @@ def main():
     task2 = FrankaPushGeometry(geometry="cube", use_rl_policy=False)
     ctrl2 = CEM(
         task=task2,
-        num_samples=32,
-        num_elites=4,
+        num_samples=64,
+        num_elites=8,
         sigma_start=0.1,
         sigma_min=0.05,
         explore_fraction=0.5,
         plan_horizon=0.5,
         spline_type="zero",
         num_knots=6,
+        seed=args.seed,
     )
     data2 = run_batched_experiment(
         task2, ctrl2,
@@ -642,14 +668,15 @@ def main():
     task3 = FrankaPushGeometry(geometry="cube", use_rl_policy=True)
     ctrl3 = CEM(
         task=task3,
-        num_samples=42,
-        num_elites=4,
+        num_samples=64,
+        num_elites=8,
         sigma_start=0.1,
         sigma_min=0.05,
         explore_fraction=0.5,
         plan_horizon=0.5,
         spline_type="zero",
         num_knots=6,
+        seed=args.seed,
     )
     data3 = run_batched_experiment(
         task3, ctrl3,
@@ -664,40 +691,44 @@ def main():
     approaches = ["Policy", "CEM", "Policy-guided CEM"]
     
     # Print metrics table
-    print("\n" + "="*100)
-    print(f"{'Metric':<25} | {'Policy':<22} | {'CEM':<22} | {'Policy-guided CEM':<22}")
-    print("-" * 100)
+    print("\n" + "="*110)
+    print(f"{'Metric':<30} | {'Policy':<24} | {'CEM':<24} | {'Policy-guided CEM':<24}")
+    print("-" * 110)
     
-    def fmt_metric(val, std=None):
+    def fmt_metric_iqr(val, q1=None, q3=None):
         if val == float('inf'):
             return "N/A"
-        if std is not None and std > 0:
-            return f"{val:.4f} ± {std:.4f}"
+        if q1 is not None and q3 is not None and q1 != float('inf') and q3 != float('inf'):
+            return f"{val:.4f} ({q1:.4f}-{q3:.4f})"
         return f"{val:.4f}"
     
-    for metric in ["mean_dist", "final_dist", "min_dist"]:
-        print(f"{metric:<25} | " + " | ".join(
-            f"{fmt_metric(results[a]['metrics'][metric], results[a]['metrics'].get(metric+'_std')):<22}"
-            for a in approaches))
-    
-    for metric in ["mean_ori_error", "final_ori_error"]:
-        print(f"{metric} (°)"[:25].ljust(25) + " | " + " | ".join(
-            f"{fmt_metric(results[a]['metrics'][metric], results[a]['metrics'].get(metric+'_std')):<22}"
-            for a in approaches))
-    
-    print(f"{'total_error':<25} | " + " | ".join(
-        f"{fmt_metric(results[a]['metrics']['total_error'], results[a]['metrics'].get('total_error_std')):<22}"
+    # Final position error
+    print(f"{'Final Position Error (m)':<30} | " + " | ".join(
+        f"{fmt_metric_iqr(results[a]['metrics']['final_dist'], results[a]['metrics'].get('final_dist_q1'), results[a]['metrics'].get('final_dist_q3')):<24}"
         for a in approaches))
     
-    print(f"{'time_to_5cm (s)':<25} | " + " | ".join(
-        f"{fmt_metric(results[a]['metrics']['time_to_5cm']):<22}"
+    # Final orientation error
+    print(f"{'Final Ori Error (°)':<30} | " + " | ".join(
+        f"{fmt_metric_iqr(results[a]['metrics']['final_ori_error'], results[a]['metrics'].get('final_ori_error_q1'), results[a]['metrics'].get('final_ori_error_q3')):<24}"
         for a in approaches))
     
-    print(f"{'success_rate':<25} | " + " | ".join(
-        f"{results[a]['metrics']['success_rate']:<22.2%}"
+    # Total running cost
+    print(f"{'Total Running Cost':<30} | " + " | ".join(
+        f"{fmt_metric_iqr(results[a]['metrics']['total_running_cost'], results[a]['metrics'].get('total_running_cost_q1'), results[a]['metrics'].get('total_running_cost_q3')):<24}"
         for a in approaches))
     
-    print("="*100 + "\n")
+    # Time to success
+    print(f"{'Time to Success (s)':<30} | " + " | ".join(
+        f"{fmt_metric_iqr(results[a]['metrics']['time_to_success'], results[a]['metrics'].get('time_to_success_q1'), results[a]['metrics'].get('time_to_success_q3')):<24}"
+        for a in approaches))
+    
+    # Success rate
+    print(f"{'Success Rate':<30} | " + " | ".join(
+        f"{results[a]['metrics']['success_rate']:<24.2%}"
+        for a in approaches))
+    
+    print("="*110)
+    print("Success criteria: position error < 3cm AND orientation error < 10°\n")
     
     # Generate LaTeX table
     generate_latex_table(results, "franka_push_results.tex")

@@ -293,9 +293,9 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
     min_dist_per_env = np.min(dists[:, mask], axis=1)
     final_ori_per_env = ori_errors[:, -1]
     
-    # Success thresholds
-    pos_threshold = 0.05  # 5cm position error
-    ori_threshold = 15.0 * np.pi / 180  # 15 degrees orientation error
+    # Success thresholds: dist < 3cm AND ori < 10 degrees
+    pos_threshold = 0.03  # 3cm position error
+    ori_threshold = 10.0 * np.pi / 180  # 10 degrees orientation error
     
     # Success requires BOTH position AND orientation criteria
     success_per_env = (final_dist_per_env < pos_threshold) & (final_ori_per_env < ori_threshold)
@@ -371,14 +371,15 @@ def run_condition_experiment(
         if use_cem:
             controller = CEM(
                 task=task,
-                num_samples=128,
-                num_elites=16,
+                num_samples=64,
+                num_elites=8,
                 sigma_start=0.1,
                 sigma_min=0.05,
                 explore_fraction=0.5,
                 plan_horizon=0.5,
                 spline_type="zero",
                 num_knots=6,
+                seed=base_seed,
             )
         else:
             controller = None
@@ -458,7 +459,7 @@ def print_summary_table(results: Dict):
     print("="*110)
     
     # Success rate table
-    print("\nSuccess Rate (dist<5cm AND ori<15°):")
+    print("\nSuccess Rate (dist<3cm AND ori<10°):")
     print("-"*80)
     header = f"{'Condition':<25}"
     for mode in modes:
@@ -509,7 +510,7 @@ def plot_robustness_results(results: Dict, output_prefix: str = "robustness"):
         ax.bar(x + offset, medians, width, yerr=yerr, 
                label=mode, color=colors[mode], capsize=3, edgecolor='black', linewidth=0.5)
     
-    ax.axhline(y=0.05, color='green', linestyle='--', label='Success (5cm)', alpha=0.7)
+    ax.axhline(y=0.03, color='green', linestyle='--', label='Success (3cm)', alpha=0.7)
     
     ax.set_ylabel('Final Distance to Target (m)')
     ax.set_xlabel('Condition')
@@ -537,7 +538,7 @@ def plot_robustness_results(results: Dict, output_prefix: str = "robustness"):
     
     ax.set_ylabel('Success Rate (%)')
     ax.set_xlabel('Condition')
-    ax.set_title('Success Rate (dist<5cm, ori<15°)')
+    ax.set_title('Success Rate (dist<3cm, ori<10°)')
     ax.set_xticks(x)
     ax.set_xticklabels(conditions, rotation=45, ha='right')
     ax.legend(loc='upper right')
@@ -582,7 +583,7 @@ def generate_latex_table(results: Dict, output_path: str):
         lines.append(row)
     
     lines.append(r"\midrule")
-    lines.append(r"\multicolumn{" + str(len(modes) + 1) + r"}{l}{\textit{Success Rate (\%, dist<5cm, ori<15°)}} \\")
+    lines.append(r"\multicolumn{" + str(len(modes) + 1) + r"}{l}{\textit{Success Rate (\%, dist<3cm, ori<10°)}} \\")
     
     for cond in conditions:
         row = cond.replace("_", r"\_")

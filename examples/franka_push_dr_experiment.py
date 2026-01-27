@@ -390,6 +390,7 @@ def run_condition_experiment(
                 plan_horizon=0.5,
                 spline_type="zero",
                 num_knots=6,
+                seed=base_seed,
             )
         elif mode == "Policy-guided CEM":
             controller = CEM(
@@ -404,6 +405,7 @@ def run_condition_experiment(
                 num_knots=6,
                 num_randomizations=num_randomizations,
                 risk_strategy=ConditionalValueAtRisk(alpha=0.25),
+                seed=base_seed,
             )
         else:
             controller = None
