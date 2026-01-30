@@ -14,6 +14,10 @@ import numpy as np
 from mujoco import mjx
 from mujoco.mjx._src import math
 
+GRID_SIZE = 0.05
+WORKSPACE_MIN = (0.3, -0.5, 0.0)
+WORKSPACE_MAX = (0.75, 0.7, 0.5)
+
 from hydrax.task_base import Task
 
 
@@ -146,12 +150,76 @@ class FrankaPushGeometry(Task):
         self.nu = 7
         self.u_min = jnp.full(7, -5.0)
         self.u_max = jnp.full(7, 5.0)
+
+        # Joint limits (from PandaRobotiqBase)
+        self.jnt_range = jnp.array([
+            [-2.8973, 2.8973],
+            [-1.7628, 1.7628],
+            [-2.8973, 2.8973],
+            [-3.0718, -0.0698],
+            [-2.8973, 2.8973],
+            [-0.0175, 3.7525],
+            [-2.8973, 2.8973],
+        ])
+        self.jnt_vel_range = jnp.array([
+            [-2.1750, 2.1750],
+            [-2.1750, 2.1750],
+            [-2.1750, 2.1750],
+            [-2.1750, 2.1750],
+            [-2.6100, 2.6100],
+            [-2.6100, 2.6100],
+            [-2.6100, 2.6100],
+        ])
+        self._joint_limit_percentage = 0.9
+        self._joint_vel_limit_percentage = 0.9
         
         # Store key body/geom/site IDs
         self._obj_body = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_BODY, "box")
         self._obj_geom = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_GEOM, "box")
         self._gripper_site = mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, "gripper")
         self._mocap_target = 0  # First mocap body
+        self._robot_arm_qposadr = slice(0, 7) # In SPC task, qpos is usually direct, but let's assume first 7.
+        # Note: In MJX task wrapper, qpos might be full or reordered. 
+        # In FrankaPushGeometry, qpos matches the model.
+        
+        # Sensors for collision detection
+        GRIPPER_GEOMS = [
+            "left_coupler_col_1", "left_coupler_col_2", "left_follower_pad2",
+            "right_coupler_col_1", "right_coupler_col_2", "right_follower_pad2",
+        ]
+        self._gripper_obj_normal_sensor = []
+        # Attempt to find sensors if they exist (they are used in playground reward, but maybe not in this model?)
+        # The model is loaded from playground XMLs, so they should be there.
+        # But let's be safe with try/except or name check.
+        try:
+             self._gripper_obj_normal_sensor = [
+                mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SENSOR, geom + "_box_normal")
+                for geom in GRIPPER_GEOMS
+            ]
+        except:
+             pass # Maybe names are different or not present in all XMLs
+
+        hand_geoms = ["left_finger_pad", "right_finger_pad", "hand_capsule"]
+        self._hand_wall_found_sensor = []
+        self._hand_floor_found_sensor = []
+        try:
+            self._hand_wall_found_sensor = [
+                mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "wall_" + hand_geom + "_found")
+                for hand_geom in hand_geoms
+            ]
+            self._hand_floor_found_sensor = [
+                mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SENSOR, "floor_" + hand_geom + "_found")
+                for hand_geom in hand_geoms
+            ]
+            
+            # Pre-calculate sensor addresses
+            self._hand_wall_sensor_adr = jnp.array([mj_model.sensor_adr[i] for i in self._hand_wall_found_sensor])
+            self._hand_floor_sensor_adr = jnp.array([mj_model.sensor_adr[i] for i in self._hand_floor_found_sensor])
+            
+        except:
+            print("Warning: Collision sensors not found in model.")
+            self._hand_wall_sensor_adr = jnp.array([], dtype=int)
+            self._hand_floor_sensor_adr = jnp.array([], dtype=int)
         
         # Robot parameters (copied from PandaRobotiqPushCube defaults)
         self._action_scale = 0.1
@@ -312,8 +380,8 @@ class FrankaPushGeometry(Task):
         box_offset = 0.15
         rng_box1_x, rng_box1_y = jax.random.split(rng_box1)
         box_x = float(jax.random.uniform(rng_box1_x, 
-            minval=init_obj_pos[0] - box_offset * 0.4,
-            maxval=init_obj_pos[0] + box_offset * 0.4))
+            minval=init_obj_pos[0] - box_offset,
+            maxval=init_obj_pos[0] + box_offset))
         box_y = float(jax.random.uniform(rng_box1_y,
             minval=init_obj_pos[1] - box_offset,
             maxval=init_obj_pos[1] + box_offset))
@@ -334,8 +402,8 @@ class FrankaPushGeometry(Task):
         target_offset = 0.05
         rng_target_x, rng_target_y = jax.random.split(rng_target)
         target_x = float(jax.random.uniform(rng_target_x,
-            minval=init_obj_pos[0] - target_offset * 0.4,
-            maxval=init_obj_pos[0] + target_offset * 0.4))
+            minval=init_obj_pos[0] - target_offset,
+            maxval=init_obj_pos[0] + target_offset))
         target_y = float(jax.random.uniform(rng_target_y,
             minval=init_obj_pos[1] - target_offset,
             maxval=init_obj_pos[1] + target_offset))
@@ -344,7 +412,7 @@ class FrankaPushGeometry(Task):
         target_z = init_obj_pos[2]  # Same height as object
         
         # Target quaternion: up to 45 degrees rotation combined with box rotation
-        target_theta = float(jax.random.uniform(rng_theta, minval=0, maxval=45*jnp.pi/180))
+        target_theta = float(jax.random.uniform(rng_theta, minval=0, maxval=90*jnp.pi/180))
         target_quat = [float(jnp.cos(target_theta/2)), 0.0, 0.0, float(jnp.sin(target_theta/2))]
         
         mj_data.mocap_pos[0] = [target_x, target_y, target_z]
@@ -421,8 +489,8 @@ class FrankaPushGeometry(Task):
         box_offset = 0.15
         rng_box1_x, rng_box1_y = jax.random.split(rng_box1)
         box_x = jax.random.uniform(rng_box1_x, 
-            minval=init_obj_pos[0] - box_offset * 0.4,
-            maxval=init_obj_pos[0] + box_offset * 0.4)
+            minval=init_obj_pos[0] - box_offset,
+            maxval=init_obj_pos[0] + box_offset)
         box_y = jax.random.uniform(rng_box1_y,
             minval=init_obj_pos[1] - box_offset,
             maxval=init_obj_pos[1] + box_offset)
@@ -437,8 +505,8 @@ class FrankaPushGeometry(Task):
         target_offset = 0.05
         rng_target_x, rng_target_y = jax.random.split(rng_target)
         target_x = jax.random.uniform(rng_target_x,
-            minval=init_obj_pos[0] - target_offset * 0.4,
-            maxval=init_obj_pos[0] + target_offset * 0.4)
+            minval=init_obj_pos[0] - target_offset,
+            maxval=init_obj_pos[0] + target_offset)
         target_y = jax.random.uniform(rng_target_y,
             minval=init_obj_pos[1] - target_offset,
             maxval=init_obj_pos[1] + target_offset)
@@ -447,7 +515,7 @@ class FrankaPushGeometry(Task):
         target_z = init_obj_pos[2]
         
         # Target quaternion
-        target_theta = jax.random.uniform(rng_theta, minval=0, maxval=45*jnp.pi/180)
+        target_theta = jax.random.uniform(rng_theta, minval=0, maxval=90*jnp.pi/180)
         target_quat = jnp.array([jnp.cos(target_theta/2), 0.0, 0.0, jnp.sin(target_theta/2)])
         
         # Build qpos
@@ -593,10 +661,62 @@ class FrankaPushGeometry(Task):
             + 1.0 * orientation_cost
             + residual_term
         )
-    
+
     def terminal_cost(self, state: mjx.Data) -> jax.Array:
         """Terminal cost."""
         return self.running_cost(state, jnp.zeros(self.nu))
+    
+    def constraint_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
+        """Constraint cost mimicking playground termination conditions.
+        
+        Returns > 0 if constraints are violated.
+        """
+        # 1. Box out of bounds
+        box_pos = state.xpos[self._obj_body]
+        box_oob = box_pos[2] < -0.01
+        box_oob_xy = (box_pos[0] > WORKSPACE_MAX[0]) | (box_pos[0] < WORKSPACE_MIN[0])
+        box_oob_xy |= (box_pos[1] > WORKSPACE_MAX[1]) | (box_pos[1] < WORKSPACE_MIN[1])
+        box_violation = box_oob | box_oob_xy
+        
+        # # 2. End effector out of bounds
+        # gripper_pos = state.site_xpos[self._gripper_site]
+        # eef_oob = gripper_pos[2] > WORKSPACE_MAX[2]
+        # eef_oob_xy = (gripper_pos[0] > WORKSPACE_MAX[0]) | (gripper_pos[0] < WORKSPACE_MIN[0])
+        # eef_oob_xy |= (gripper_pos[1] > WORKSPACE_MAX[1]) | (gripper_pos[1] < WORKSPACE_MIN[1])
+        # eef_violation = eef_oob | eef_oob_xy
+        
+        # # 3. Joint limits
+        # # qpos is full qpos, arm is first 7
+        # arm_qpos = state.qpos[:7]
+        # joints_near_limits = jnp.any(
+        #     jnp.logical_or(
+        #         arm_qpos > (self.jnt_range[:, 1] * self._joint_limit_percentage),
+        #         arm_qpos < (self.jnt_range[:, 0] * self._joint_limit_percentage),
+        #     )
+        # )
+        
+        # # 4. Collisions (if sensors available)
+        # collision_violation = 0.0
+        # if self._hand_wall_sensor_adr.size > 0:
+        #     # Check wall collisions
+        #     hand_wall_vals = state.sensordata[self._hand_wall_sensor_adr]
+        #     has_wall_collision = jnp.any(hand_wall_vals > 0)
+            
+        #     # Check floor collisions
+        #     hand_floor_vals = state.sensordata[self._hand_floor_sensor_adr]
+        #     has_floor_collision = jnp.any(hand_floor_vals > 0)
+            
+        #     collision_violation = jnp.logical_or(has_wall_collision, has_floor_collision).astype(float)
+            
+        # Sum of violations (treated as boolean 0.0 or 1.0)
+        total_violation = (
+            box_violation.astype(float) 
+            # + eef_violation.astype(float) 
+            # + joints_near_limits.astype(float)
+            # + collision_violation
+        )
+        
+        return total_violation
     
     def domain_randomize_model(self, rng: jax.Array) -> dict:
         """Randomize mass, inertia, and friction of the pushed object for domain randomization.

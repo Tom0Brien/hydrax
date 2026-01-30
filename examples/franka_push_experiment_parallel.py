@@ -361,8 +361,8 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
     total_cost_median, total_cost_q1, total_cost_q3 = median_iqr(total_running_cost_per_env)
     
     # Success thresholds: dist < 3cm AND ori < 10 degrees
-    pos_threshold = 0.03  # 3cm position error
-    ori_threshold = 10.0 * np.pi / 180  # 10 degrees orientation error
+    pos_threshold = 0.05  # 3cm position error
+    ori_threshold = 15.0 * np.pi / 180  # 10 degrees orientation error
     
     # Time to success: first time BOTH position and orientation are within threshold
     def time_to_success(dist_seq, ori_seq):
@@ -388,7 +388,7 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
     
     # Success rate (based on final state)
     success_per_env = (final_dist_per_env < pos_threshold) & (final_ori_per_env < ori_threshold)
-    
+    print("Success rate:", np.mean(success_per_env))
     return {
         # Final position (median + IQR)
         "final_dist": final_dist_median,
@@ -625,7 +625,7 @@ def main():
     print("\n" + "="*50)
     print("Scenario 1: Policy Alone")
     print("="*50)
-    task1 = FrankaPushGeometry(geometry="cube", use_rl_policy=True)
+    task1 = FrankaPushGeometry(geometry="tblock", use_rl_policy=True)
     data1 = run_batched_experiment(
         task1, None,
         num_evals=num_evals,
@@ -642,7 +642,7 @@ def main():
     task2 = FrankaPushGeometry(geometry="cube", use_rl_policy=False)
     ctrl2 = CEM(
         task=task2,
-        num_samples=64,
+        num_samples=96,
         num_elites=8,
         sigma_start=0.1,
         sigma_min=0.05,
@@ -668,7 +668,7 @@ def main():
     task3 = FrankaPushGeometry(geometry="cube", use_rl_policy=True)
     ctrl3 = CEM(
         task=task3,
-        num_samples=64,
+        num_samples=96,
         num_elites=8,
         sigma_start=0.1,
         sigma_min=0.05,

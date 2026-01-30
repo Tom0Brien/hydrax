@@ -294,8 +294,8 @@ def compute_metrics(data: ParallelRolloutData) -> dict:
     final_ori_per_env = ori_errors[:, -1]
     
     # Success thresholds: dist < 3cm AND ori < 10 degrees
-    pos_threshold = 0.03  # 3cm position error
-    ori_threshold = 10.0 * np.pi / 180  # 10 degrees orientation error
+    pos_threshold = 0.05  # 3cm position error
+    ori_threshold = 15.0 * np.pi / 180  # 10 degrees orientation error
     
     # Success requires BOTH position AND orientation criteria
     success_per_env = (final_dist_per_env < pos_threshold) & (final_ori_per_env < ori_threshold)

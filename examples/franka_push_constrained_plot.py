@@ -72,58 +72,68 @@ def run_single_rollout(
     # Initialize controller
     policy_params = controller.init_params(initial_knots=None, seed=seed)
     
-    # JIT compile
-    jit_optimize = jax.jit(controller.optimize)
-    jit_interp_func = jax.jit(controller.interp_func)
-    
-    @jax.jit
-    def step_env(data, ctrl):
-        data = task.apply_control(data, ctrl)
-        def single_step(d, _):
-            return mjx.step(model, d), None
-        data = jax.lax.scan(single_step, data, None, n_substeps)[0]
-        return data
-    
-    # Warmup
-    _, _ = jit_optimize(mjx_data, policy_params)
-    
     # Timing
     replan_period = 1.0 / frequency
     sim_dt = task.dt
     sim_steps_per_replan = max(1, int(replan_period / sim_dt))
     num_replans = int(duration * frequency)
     
-    # Collect trajectory
+    # Compile the entire rollout to avoid Python overhead
     obj_body_id = task._obj_body
-    box_trajectory = []
     
-    # Get start position
-    start_pos = np.array(mjx_data.xpos[obj_body_id, :2])
+    # Define the scan function for the entire rollout
+    def rollout_scan_fn(carry, _):
+        data, params = carry
+        
+        # Optimize policy (returns params with updated time/knots)
+        params, _ = controller.optimize(data, params)
+        
+        # Calculate controls for this replan segment
+        t_current = data.time
+        tq = jnp.arange(0, sim_steps_per_replan) * sim_dt + t_current
+        knots = params.mean[None, ...]
+        us = controller.interp_func(tq, params.tk, knots)[0]
+        
+        # Inner loop: Step simulation 'sim_steps_per_replan' times
+        def segment_step(d, u):
+            d = task.apply_control(d, u)
+            
+            # Sub-step physics (n_substeps)
+            def physics_step(dd, _):
+                return mjx.step(model, dd), None
+            d = jax.lax.scan(physics_step, d, None, n_substeps)[0]
+            
+            # Return data and position
+            return d, d.xpos[obj_body_id, :2]
+
+        data, segment_pos = jax.lax.scan(segment_step, data, us)
+        
+        return (data, params), segment_pos
+
+    @jax.jit
+    def run_rollout(d, p):
+        (final_d, final_p), all_pos = jax.lax.scan(
+            rollout_scan_fn, (d, p), None, length=num_replans
+        )
+        return final_d, all_pos
     
-    print("Running rollout...")
+    print("Compiling and running rollout...")
     start_time = time.time()
     
-    for step in range(num_replans):
-        # Optimize
-        policy_params, _ = jit_optimize(mjx_data, policy_params)
-        
-        # Get controls
-        t_curr = mjx_data.time
-        tq = jnp.arange(0, sim_steps_per_replan) * sim_dt + t_curr
-        knots = policy_params.mean[None, ...]
-        us = jit_interp_func(tq, policy_params.tk, knots)[0]
-        
-        # Step simulation
-        for i in range(sim_steps_per_replan):
-            mjx_data = step_env(mjx_data, us[i])
-            box_pos = np.array(mjx_data.xpos[obj_body_id, :2])
-            box_trajectory.append(box_pos.copy())
+    # Run entire rollout in one go
+    final_data, trajectories = run_rollout(mjx_data, policy_params)
+    
+    # Get start position (from initial state)
+    start_pos = np.array(mjx_data.xpos[obj_body_id, :2])
+    
+    # Process results
+    box_trajectory = np.array(trajectories.reshape(-1, 2))
     
     elapsed = time.time() - start_time
     print(f"Rollout completed in {elapsed:.1f}s")
     
     # Get final position
-    final_pos = np.array(mjx_data.xpos[obj_body_id, :2])
+    final_pos = np.array(final_data.xpos[obj_body_id, :2])
     
     return {
         "start_pos": start_pos,
@@ -270,8 +280,8 @@ def main():
     # Create controller
     controller = CCEM(
         task=task,
-        num_samples=256,
-        num_elites=16,
+        num_samples=96,
+        num_elites=8,
         sigma_start=0.3,
         sigma_min=0.05,
         explore_fraction=0.5,
